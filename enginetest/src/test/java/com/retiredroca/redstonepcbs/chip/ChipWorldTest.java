@@ -1,0 +1,280 @@
+package com.retiredroca.redstonepcbs.chip;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+
+class ChipWorldTest {
+
+    private static void place(ChipWorld w, int x, int y, int z, Part part, Dir facing) {
+        w.set(x, y, z, part, facing);
+    }
+
+    @Test
+    void dustDecaysAwayFromASource() {
+        ChipWorld w = new ChipWorld();
+        place(w, 1, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 2, 0, 0, Part.DUST, Dir.UP);
+        place(w, 3, 0, 0, Part.DUST, Dir.UP);
+        place(w, 4, 0, 0, Part.DUST, Dir.UP);
+
+        w.settleNow();
+
+        assertEquals(15, w.cell(2, 0, 0).power);
+        assertEquals(14, w.cell(3, 0, 0).power);
+        assertEquals(13, w.cell(4, 0, 0).power);
+    }
+
+    @Test
+    void torchInvertsItsSupport() {
+        ChipWorld w = new ChipWorld();
+        place(w, 1, 0, 0, Part.SOLID, Dir.UP);
+        place(w, 1, 1, 0, Part.TORCH, Dir.DOWN);
+
+        w.settleNow();
+        assertTrue(w.cell(1, 1, 0).powered, "torch should be lit while its support is unpowered");
+
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        w.settleNow();
+        w.tick();
+
+        assertFalse(w.cell(1, 1, 0).powered, "torch should turn off once its support is powered");
+    }
+
+    @Test
+    void repeaterDelaysThenEmits() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 1, 0, 0, Part.REPEATER, Dir.EAST);
+        place(w, 2, 0, 0, Part.LAMP, Dir.UP);
+
+        w.settleNow();
+        assertFalse(w.cell(2, 0, 0).powered, "lamp should be off before the repeater fires");
+
+        w.tick();
+        assertTrue(w.cell(1, 0, 0).powered, "repeater should be powered after its delay");
+        assertTrue(w.cell(2, 0, 0).powered, "lamp should light after the repeater fires");
+    }
+
+    @Test
+    void repeaterRespectsConfiguredDelay() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 1, 0, 0, Part.REPEATER, Dir.EAST);
+        w.cell(1, 0, 0).delay = 3;
+
+        w.settleNow();
+        w.tick();
+        w.tick();
+        w.tick();
+        assertFalse(w.cell(1, 0, 0).powered, "configured for 4 ticks, should not be on at tick 3");
+
+        w.tick();
+        assertTrue(w.cell(1, 0, 0).powered, "should be on at tick 4");
+    }
+
+    @Test
+    void comparatorSubtractMode() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 1, 0, 0, Part.COMPARATOR, Dir.EAST);
+        place(w, 1, 0, 1, Part.REDSTONE_BLOCK, Dir.UP);
+        w.cell(1, 0, 0).subtract = true;
+
+        w.settleNow();
+        w.tick();
+
+        assertEquals(0, w.cell(1, 0, 0).power, "15 back - 15 side should output 0");
+    }
+
+    @Test
+    void comparatorCompareMode() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 1, 0, 0, Part.COMPARATOR, Dir.EAST);
+
+        w.settleNow();
+        w.tick();
+
+        assertEquals(15, w.cell(1, 0, 0).power);
+        assertTrue(w.cell(1, 0, 0).powered);
+    }
+
+    @Test
+    void faceInputPowersBoundaryDust() {
+        ChipWorld w = new ChipWorld();
+        w.setFaceInput(Dir.EAST, 15);
+        place(w, 15, 0, 0, Part.DUST, Dir.UP);
+
+        w.settleNow();
+
+        assertEquals(15, w.cell(15, 0, 0).power);
+    }
+
+    @Test
+    void faceOutputReportsStrongestEmitter() {
+        ChipWorld w = new ChipWorld();
+        place(w, 15, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+
+        w.settleNow();
+
+        assertEquals(15, w.getFaceOutput(Dir.EAST));
+        assertEquals(0, w.getFaceOutput(Dir.WEST));
+    }
+
+    @Test
+    void buttonPulsesThenReleases() {
+        ChipWorld w = new ChipWorld();
+        place(w, 1, 0, 0, Part.BUTTON, Dir.UP);
+        place(w, 2, 0, 0, Part.LAMP, Dir.UP);
+
+        w.pressButton(w.index(1, 0, 0));
+        w.settleNow();
+        assertTrue(w.cell(2, 0, 0).powered, "lamp should light while the button is pressed");
+
+        for (int i = 0; i < 10; i++) {
+            w.tick();
+        }
+
+        assertFalse(w.cell(1, 0, 0).on, "button should release after its pulse");
+        assertFalse(w.cell(2, 0, 0).powered, "lamp should turn off after the pulse");
+    }
+
+    @Test
+    void serializationRoundTrips() {
+        ChipWorld w = new ChipWorld();
+        w.set(1, 2, 3, Part.REPEATER, Dir.NORTH);
+        w.cell(1, 2, 3).delay = 2;
+        w.cell(1, 2, 3).powered = true;
+        w.set(4, 5, 6, Part.DUST, Dir.UP);
+        w.cell(4, 5, 6).power = 7;
+        w.set(7, 8, 9, Part.TORCH, Dir.DOWN);
+        w.cell(7, 8, 9).powered = true;
+        w.set(10, 11, 12, Part.LEVER, Dir.UP);
+        w.cell(10, 11, 12).on = true;
+
+        ChipWorld r = ChipSerializer.read(ChipSerializer.write(w));
+
+        assertEquals(Part.REPEATER, r.cell(1, 2, 3).part);
+        assertEquals(Dir.NORTH, r.cell(1, 2, 3).facing);
+        assertEquals(2, r.cell(1, 2, 3).delay);
+        assertTrue(r.cell(1, 2, 3).powered);
+        assertEquals(7, r.cell(4, 5, 6).power);
+        assertEquals(Part.TORCH, r.cell(7, 8, 9).part);
+        assertTrue(r.cell(7, 8, 9).powered);
+        assertTrue(r.cell(10, 11, 12).on);
+    }
+
+    @Test
+    void comparatorReadsAnalogFaceInput() {
+        ChipWorld w = new ChipWorld();
+        w.setFaceAnalog(Dir.EAST, 7);
+        place(w, 15, 0, 0, Part.COMPARATOR, Dir.WEST);
+
+        w.settleNow();
+        w.tick();
+
+        assertEquals(7, w.cell(15, 0, 0).power);
+        assertTrue(w.cell(15, 0, 0).powered);
+    }
+
+    @Test
+    void analogFaceInputDoesNotPowerDust() {
+        ChipWorld w = new ChipWorld();
+        w.setFaceAnalog(Dir.EAST, 15);
+        place(w, 15, 0, 0, Part.DUST, Dir.UP);
+
+        w.settleNow();
+
+        assertEquals(0, w.cell(15, 0, 0).power);
+    }
+
+    @Test
+    void torchRotatesOnlyBetweenSupportedDirections() {
+        ChipWorld w = new ChipWorld();
+        place(w, 5, 3, 5, Part.SOLID, Dir.UP);
+        place(w, 5, 4, 4, Part.SOLID, Dir.UP);
+        place(w, 5, 4, 5, Part.TORCH, Dir.DOWN);
+
+        int idx = w.index(5, 4, 5);
+        w.rotate(idx);
+
+        assertEquals(Dir.NORTH, w.cell(5, 4, 5).facing, "should move to the supported north side");
+    }
+
+    @Test
+    void dustShapeControlsPropagation() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
+        place(w, 1, 0, 0, Part.DUST, Dir.UP);
+        place(w, 2, 0, 0, Part.DUST, Dir.UP);
+        int d1 = w.index(1, 0, 0);
+
+        w.settleNow();
+        assertEquals(15, w.cell(1, 0, 0).power, "a cross receives from the adjacent source");
+        assertEquals(14, w.cell(2, 0, 0).power, "and passes it to the next dust");
+
+        w.cell(d1).dustMask = 0x00;
+        w.settleNow();
+        assertEquals(15, w.cell(1, 0, 0).power, "a dot is still powered by the adjacent source");
+        assertEquals(0, w.cell(2, 0, 0).power, "but does not feed the neighbouring dust");
+
+        w.cell(d1).dustMask = 0x05;
+        w.settleNow();
+        assertEquals(0, w.cell(2, 0, 0).power, "a north-south line blocks east-west dust");
+
+        w.cell(d1).dustMask = 0x0A;
+        w.settleNow();
+        assertEquals(15, w.cell(1, 0, 0).power);
+        assertEquals(14, w.cell(2, 0, 0).power, "an east-west line connects the dusts again");
+    }
+
+    @Test
+    void dustDotWeaklyPowersTheBlockBelow() {
+        ChipWorld w = new ChipWorld();
+        place(w, 1, 0, 0, Part.SOLID, Dir.UP);
+        place(w, 1, 1, 0, Part.DUST, Dir.UP);
+        w.cell(w.index(1, 1, 0)).dustMask = 0x00;
+        place(w, 0, 1, 0, Part.REDSTONE_BLOCK, Dir.UP);
+
+        w.settleNow();
+
+        assertEquals(15, w.cell(1, 1, 0).power);
+        assertTrue(w.cell(1, 0, 0).weak, "a dot still weakly powers the block under it");
+    }
+
+    @Test
+    void hopperRotatesOnlyThroughValidDirections() {
+        ChipWorld w = new ChipWorld();
+        place(w, 4, 4, 4, Part.HOPPER, Dir.DOWN);
+        int idx = w.index(4, 4, 4);
+
+        // A hopper can face down or a side, never up.
+        for (int i = 0; i < 10; i++) {
+            w.rotate(idx);
+            assertNotEquals(Dir.UP, w.cell(4, 4, 4).facing, "hoppers must never face up");
+        }
+        assertEquals(Dir.DOWN, w.cell(4, 4, 4).facing, "cycles back around after 5 steps");
+    }
+
+    @Test
+    void sanitizeFacingClampsToSupportedDirections() {
+        assertEquals(Dir.DOWN, Part.HOPPER.sanitizeFacing(Dir.UP));
+        assertEquals(Dir.DOWN, Part.TORCH.sanitizeFacing(Dir.UP));
+        assertEquals(Dir.NORTH, Part.REPEATER.sanitizeFacing(Dir.UP));
+        assertEquals(Dir.EAST, Part.HOPPER.sanitizeFacing(Dir.EAST));
+        assertEquals(Dir.SOUTH, Part.REPEATER.sanitizeFacing(Dir.SOUTH));
+    }
+
+    @Test
+    void torchStandsOnTheBoardFloor() {
+        ChipWorld w = new ChipWorld();
+        place(w, 2, 0, 2, Part.TORCH, Dir.DOWN);
+
+        assertTrue(w.hasSupport(w.index(2, 0, 2), Dir.DOWN), "the bottom layer is a floor");
+        assertFalse(w.hasSupport(w.index(2, 1, 2), Dir.DOWN), "above the floor there is no support");
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "block.redstonepcbs.pcb": "PCB",
+  "item.redstonepcbs.pcb": "PCB",
+  "screen.redstonepcbs.editor": "PCB Editor",
+  "screen.redstonepcbs.library": "Saved Designs",
+  "message.redstonepcbs.need_paper": "Need paper to save a design",
+  "message.redstonepcbs.saved": "Design saved",
+  "message.redstonepcbs.library_empty": "No saved designs yet"
+}

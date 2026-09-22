@@ -1,0 +1,73 @@
+package com.retiredroca.redstonepcbs.net;
+
+import com.retiredroca.redstonepcbs.RedstonePcbs;
+
+import io.netty.buffer.ByteBuf;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.ResourceLocation;
+
+/** Client -> server edit request for a board, either a placed block or a PCB item in an inventory slot. */
+public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int index, int packed)
+        implements CustomPacketPayload {
+
+    public static final int KIND_BLOCK = 0;
+    public static final int KIND_ITEM = 1;
+
+    public static final int ACTION_SET = 0;
+    public static final int ACTION_CLEAR = 1;
+    public static final int ACTION_INTERACT = 2;
+    public static final int ACTION_ROTATE = 3;
+    public static final int ACTION_CYCLE_DELAY = 4;
+    public static final int ACTION_TOGGLE_MODE = 5;
+    public static final int ACTION_CLEAR_ALL = 6;
+    public static final int ACTION_REQUEST = 7;
+    public static final int ACTION_SET_FILTER = 8;
+    public static final int ACTION_CLEAR_FILTER = 9;
+    public static final int ACTION_TOGGLE_HOPPER_MODE = 10;
+
+    public static final int FLAG_SUBTRACT = 1;
+
+    public static final CustomPacketPayload.Type<C2SEditPayload> TYPE =
+            new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(RedstonePcbs.MOD_ID, "edit"));
+
+    public static final StreamCodec<ByteBuf, C2SEditPayload> STREAM_CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, C2SEditPayload::kind,
+            BlockPos.STREAM_CODEC, C2SEditPayload::pos,
+            ByteBufCodecs.VAR_INT, C2SEditPayload::slot,
+            ByteBufCodecs.VAR_INT, C2SEditPayload::action,
+            ByteBufCodecs.VAR_INT, C2SEditPayload::index,
+            ByteBufCodecs.VAR_INT, C2SEditPayload::packed,
+            C2SEditPayload::new);
+
+    public static C2SEditPayload block(BlockPos pos, int action, int index, int part, int facing, int flags) {
+        return new C2SEditPayload(KIND_BLOCK, pos, 0, action, index, pack(part, facing, flags));
+    }
+
+    public static C2SEditPayload item(int slot, int action, int index, int part, int facing, int flags) {
+        return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, action, index, pack(part, facing, flags));
+    }
+
+    public int part() {
+        return packed & 0xFF;
+    }
+
+    public int facing() {
+        return (packed >> 8) & 0xFF;
+    }
+
+    public int flags() {
+        return (packed >> 16) & 0xFF;
+    }
+
+    private static int pack(int part, int facing, int flags) {
+        return (part & 0xFF) | ((facing & 0xFF) << 8) | ((flags & 0xFF) << 16);
+    }
+
+    @Override
+    public CustomPacketPayload.Type<? extends CustomPacketPayload> type() {
+        return TYPE;
+    }
+}

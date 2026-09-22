@@ -1,0 +1,39 @@
+// Pure-Java unit tests for the loader-agnostic chip engine.
+//
+// Only the `chip` package from the 1.21.1 module's common sources is compiled here, so the tests
+// run without the Minecraft toolchain or either loader. Keeping the engine Minecraft-free is what
+// makes this possible; do not add Minecraft imports to anything under `...redstonepcbs.chip`.
+plugins {
+    id 'java'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir rootProject.file('versions/1.21.1/redstonepcbs/common/src/main/java')
+            include 'com/retiredroca/redstonepcbs/chip/**'
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+    }
+}

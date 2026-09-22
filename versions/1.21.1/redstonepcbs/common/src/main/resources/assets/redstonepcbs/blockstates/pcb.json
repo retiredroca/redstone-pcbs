@@ -1,0 +1,7 @@
+{
+  "multipart": [
+    {
+      "apply": { "model": "redstonepcbs:block/pcb" }
+    }
+  ]
+}

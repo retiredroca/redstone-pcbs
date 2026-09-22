@@ -1,0 +1,187 @@
+plugins {
+    id 'base'
+}
+
+apply from: new File(projectDir, 'gradle/versions.gradle')
+
+def mc = providers.gradleProperty('mc').getOrElse('1.21.1')
+def versionRoot = "versions/${mc}"
+
+// Discover modules under versions/<mc>/ (any directory with fabric/ + neoforge/ sources).
+def moduleDirs = (file(versionRoot).listFiles() ?: new File[0])
+        .findAll { it.isDirectory() && new File(it, 'fabric').exists() && new File(it, 'neoforge').exists() }
+        .sort { it.name }
+
+def loadModule = { File moduleDir ->
+    def p = new Properties()
+    new File(moduleDir, 'module.properties').withInputStream { p.load(it) }
+    return p
+}
+
+// Exact, version-pinned jar lookups so a stale jar from an earlier build can never be picked.
+def versionedJar = { String path ->
+    def f = file(path)
+    f.exists() ? f : null
+}
+
+def dependOnBuilds = { org.gradle.api.Task t, String id ->
+    t.dependsOn gradle.includedBuild("${id}-fabric").task(':build')
+    t.dependsOn gradle.includedBuild("${id}-neoforge").task(':build')
+}
+
+def universalTasks = []
+
+moduleDirs.each { moduleDir ->
+    def props = loadModule(moduleDir)
+    def id = props.getProperty('id')
+    def groupPath = props.getProperty('group').replace('.', '/')
+    def modVersion = stampVersion(componentVersions.getProperty(id))
+    def fabricJar = { versionedJar("${versionRoot}/${moduleDir.name}/fabric/build/libs/fabric-${id}-${modVersion}.jar") }
+    def neoforgeJar = { versionedJar("${versionRoot}/${moduleDir.name}/neoforge/build/libs/neoforge-${id}-${modVersion}.jar") }
+
+    def t = tasks.register("universalJar_${id.replaceAll('[^A-Za-z0-9]', '_')}", Jar) {
+        dependOnBuilds(delegate, id)
+        archiveFileName = "${id}-${modVersion}-universal.jar"
+        destinationDirectory = layout.buildDirectory.dir('libs')
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+        // Fabric half: fabric classes + relocated common + fabric.mod.json.
+        from({ def f = fabricJar(); f == null ? [] : zipTree(f) })
+        // NeoForge-only classes + metadata. The relocated common lives under <group>.neoforge.common,
+        // so the neoforge/** include below pulls it in.
+        from({ def f = neoforgeJar(); f == null ? [] : zipTree(f) }) {
+            include "${groupPath}/neoforge/**"
+            include 'META-INF/neoforge.mods.toml'
+            include 'META-INF/accesstransformer.cfg'
+        }
+    }
+    universalTasks << t
+}
+
+// --- staged release groups, then the union ------------------------------------------------------
+// A single-mod project has no bundles, so only the universal groups apply:
+//   1 releaseUniversal        build/release-universal/        (merged universal jars)
+//   2 releaseUniversalBundles build/release-universal-bundles/ (none here; no bundles.properties)
+// releaseLoaderJars / releaseLoaderBundles build the per-loader jars for one loader only
+// (-Ploader=fabric|neoforge). releaseJars is the ordered union of all four into build/release/.
+def loaderFilter = (findProperty('loader') ?: '').toString().toLowerCase()
+def activeLoaders = loaderFilter ? [loaderFilter] : ['fabric', 'neoforge']
+
+def loaderJarSources = { org.gradle.api.tasks.Sync t ->
+    moduleDirs.each { moduleDir ->
+        def id = loadModule(moduleDir).getProperty('id')
+        def modVersion = stampVersion(componentVersions.getProperty(id))
+        activeLoaders.each { loader ->
+            t.dependsOn gradle.includedBuild("${id}-${loader}").task(':build')
+            t.from({ versionedJar("${versionRoot}/${moduleDir.name}/${loader}/build/libs/${loader}-${id}-${modVersion}.jar") }) {
+                rename { "${loader}-${id}-${modVersion}.jar" }
+            }
+        }
+    }
+}
+
+tasks.register('releaseLoaderJars', Sync) {
+    into layout.buildDirectory.dir('release-loader')
+    loaderJarSources(delegate)
+}
+
+tasks.register('releaseLoaderBundles', Sync) {
+    into layout.buildDirectory.dir('release-loader-bundles')
+    // No bundles in a single-mod project; the group stays for a uniform release contract.
+}
+
+tasks.register('releaseUniversal', Sync) {
+    into layout.buildDirectory.dir('release-universal')
+    universalTasks.each { task ->
+        dependsOn task
+        from(task)
+    }
+}
+
+tasks.register('releaseUniversalBundles', Sync) {
+    into layout.buildDirectory.dir('release-universal-bundles')
+    // No bundles in a single-mod project.
+}
+
+// The union of every staged group into build/release/. A single Sync task (rather than per-group
+// copy tasks that all declare the same output directory) so Gradle tracks the group directories as
+// inputs and cannot skip the copy when a group was rebuilt.
+def releaseGroupDirs = [
+        layout.buildDirectory.dir('release-loader'),
+        layout.buildDirectory.dir('release-loader-bundles'),
+        layout.buildDirectory.dir('release-universal'),
+        layout.buildDirectory.dir('release-universal-bundles'),
+]
+
+tasks.register('releaseJars', Sync) {
+    dependsOn 'releaseLoaderJars', 'releaseLoaderBundles', 'releaseUniversal', 'releaseUniversalBundles'
+    into layout.buildDirectory.dir('release')
+    releaseGroupDirs.each { dir -> from(dir) }
+}
+
+tasks.register('cleanLoader') {
+    delete layout.buildDirectory.dir('release-loader')
+    delete layout.buildDirectory.dir('release-loader-bundles')
+}
+
+tasks.register('cleanUniversal') {
+    delete layout.buildDirectory.dir('release-universal')
+    delete layout.buildDirectory.dir('release-universal-bundles')
+}
+
+// No library modules in the single template, but keep the task for a uniform release contract.
+tasks.register('publishLibrary') {
+    group = 'publishing'
+    description = 'Publishes library modules (library=true) to the in-repo maven (repo/).'
+    moduleDirs.each { moduleDir ->
+        def props = loadModule(moduleDir)
+        if ((props.getProperty('library') ?: 'false').toBoolean()) {
+            def id = props.getProperty('id')
+            dependsOn gradle.includedBuild("${id}-fabric").task(':publishMavenJavaPublicationToRepoRepository')
+            dependsOn gradle.includedBuild("${id}-neoforge").task(':publishMavenJavaPublicationToRepoRepository')
+        }
+    }
+}
+
+tasks.named('build') {
+    dependsOn 'releaseJars'
+    dependsOn ':enginetest:test'
+    doLast {
+        // Sweep stale universal jars of earlier versions so build/libs only ever holds this build's.
+        def keep = moduleDirs.collect {
+            def mid = loadModule(it).getProperty('id')
+            "${mid}-${stampVersion(componentVersions.getProperty(mid))}-universal.jar".toString()
+        } as Set
+        def libs = layout.buildDirectory.dir('libs').get().asFile
+        libs.listFiles()?.each { f ->
+            if (f.isFile() && f.name.endsWith('.jar') && !keep.contains(f.name)) {
+                f.delete()
+            }
+        }
+    }
+}
+
+// Removes every generated artifact for a fully fresh build (use with `build`, or on its own).
+tasks.register('cleanArtifacts', Delete) {
+    delete layout.buildDirectory.dir('release')
+    delete layout.buildDirectory.dir('release-loader')
+    delete layout.buildDirectory.dir('release-loader-bundles')
+    delete layout.buildDirectory.dir('release-universal')
+    delete layout.buildDirectory.dir('release-universal-bundles')
+    delete layout.buildDirectory.dir('libs')
+    moduleDirs.each { moduleDir ->
+        delete new File(moduleDir, 'build/libs')
+    }
+}
+
+// Cleaning at the root cleans every included build too.
+tasks.named('clean') {
+    dependsOn ':enginetest:clean'
+    moduleDirs.each { moduleDir ->
+        def id = loadModule(moduleDir).getProperty('id')
+        dependsOn gradle.includedBuild("${id}-fabric").task(':clean')
+        dependsOn gradle.includedBuild("${id}-neoforge").task(':clean')
+    }
+}
+
+apply from: new File(projectDir, 'gradle/version-resolver.gradle')

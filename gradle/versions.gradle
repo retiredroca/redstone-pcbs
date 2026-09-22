@@ -1,0 +1,131 @@
+// Shared config/version loader for every build in this project.
+//
+//   versions.properties                       (repo root)   per-module versions: <module-id>=<version>
+//   versions/<mc>/version.properties                        Minecraft/loader/toolchain pins
+//   versions/<mc>/<module>/module.properties                 module identity (id/name/group/...)
+//
+// Every build finds the files it needs by walking up from its own projectDir, so a loader build
+// under versions/<mc>/<module>/<loader>/ resolves the right files with no hardcoded paths.
+
+def findUp = { String name ->
+    def d = projectDir
+    while (d != null && !new File(d, name).exists()) {
+        d = d.parentFile
+    }
+    d == null ? null : new File(d, name)
+}
+
+def loadProps = { File f ->
+    def p = new Properties()
+    if (f != null) {
+        f.withInputStream { p.load(it) }
+    }
+    return p
+}
+
+def versionsFile = findUp('versions.properties')
+if (versionsFile == null) {
+    throw new GradleException("versions.properties not found above ${projectDir}")
+}
+def componentVersions = loadProps(versionsFile)
+ext.componentVersions = componentVersions
+
+// Build-time version stamp. versions.properties may hold a bare "<major>.<minor>.<patch>" (before a
+// release) or an already-stamped "<major>.<minor>.<patch>.<yymmddhh>" (after one). A bare value is
+// stamped here, in the project's stamp timezone (TIMEZONE in tools/versioning.py), so built jars
+// always carry the full version. Override with -PversionStamp=<stamp>; disable with -Pnostamp=true.
+def stampTimezone = {
+    def f = findUp('tools/versioning.py')
+    if (f == null) {
+        return 'UTC'
+    }
+    def m = f.getText('UTF-8') =~ /(?m)^TIMEZONE\s*=\s*"([^"]+)"/
+    return m.find() ? m.group(1) : 'UTC'
+}
+def fixedOffsetZone = { String name ->
+    def t = name.trim().toUpperCase()
+    if (t in ['UTC', 'Z', 'GMT']) {
+        return java.time.ZoneOffset.UTC
+    }
+    def m = t =~ /^(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?$/
+    if (!m.matches()) {
+        return null
+    }
+    int sign = m.group(1) == '+' ? 1 : -1
+    int hours = m.group(2) as int
+    int minutes = (m.group(3) ?: '0') as int
+    return java.time.ZoneOffset.ofTotalSeconds(sign * (hours * 3600 + minutes * 60))
+}
+def resolveStampZone = { String name ->
+    def fixed = fixedOffsetZone(name)
+    if (fixed != null) {
+        return fixed
+    }
+    try {
+        return java.time.ZoneId.of(name)
+    } catch (Exception ignored) {
+        return java.time.ZoneOffset.UTC
+    }
+}
+def currentStamp = {
+    def override = project.findProperty('versionStamp')
+    if (override != null) {
+        return override.toString()
+    }
+    def zone = resolveStampZone(stampTimezone())
+    return java.time.ZonedDateTime.now(zone)
+            .format(java.time.format.DateTimeFormatter.ofPattern('yyMMddHH'))
+}
+def stampVersion = { String version ->
+    if (version == null || project.findProperty('nostamp') != null) {
+        return version
+    }
+    return version.tokenize('.').size() >= 4 ? version : "${version}.${currentStamp()}"
+}
+ext.stampVersion = stampVersion
+
+// Per-version Minecraft/toolchain pins, exposed under their original names so build scripts can
+// use ${minecraft_version}, ${loader_version}, ${neo_version}, etc. unchanged.
+def versionFile = findUp('version.properties')
+if (versionFile != null) {
+    def versionPins = loadProps(versionFile)
+    ['minecraft_version', 'loader_version', 'fabric_version',
+     'neo_version', 'neo_version_range', 'java_version', 'toolchain_era'].each { key ->
+        def value = versionPins.getProperty(key)
+        if (value != null) {
+            ext.set(key, value)
+        }
+    }
+    ext.versionPropsFile = versionFile
+    ext.targetMc = versionFile.parentFile.name
+}
+
+// Module identity (only present inside versions/<mc>/<module>/...).
+def moduleFile = findUp('module.properties')
+if (moduleFile != null) {
+    def module = loadProps(moduleFile)
+    ext.moduleProperties = module
+    ext.mod_id = module.getProperty('id')
+    ext.mod_name = module.getProperty('name')
+    ext.mod_group_id = module.getProperty('group')
+    ext.mod_authors = module.getProperty('authors')
+    ext.mod_license = module.getProperty('license')
+    ext.mod_description = module.getProperty('description')
+    ext.mod_version = stampVersion(componentVersions.getProperty(ext.mod_id))
+}
+
+// Version stamps are fixed-width YYMMDDHH, so lexical max == most recent.
+ext.stampOf = { String v -> v.tokenize('.').last() as String }
+ext.newestStamp = { List<String> versions -> versions.collect { stampOf(it) }.max() }
+
+// A dependency's floor range: [<major.minor.patch>,<upper>). Unused in a single-mod project, but
+// kept so the loader builds share one script shape with the multi template.
+ext.floorUpper = '1.1'   // keep in step with versioning.py's FLOOR_UPPER
+ext.moduleFloor = { String id ->
+    def version = componentVersions.getProperty(id)
+    if (version == null) {
+        throw new GradleException("versions.properties has no '${id}=' entry")
+    }
+    def bound = version.tokenize('.').take(3).join('.')
+    "[${bound},${floorUpper})"
+}

@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "top": "redstonepcbs:block/pcb_top",
+    "side": "redstonepcbs:block/pcb_side",
+    "bottom": "redstonepcbs:block/pcb_side"
+  }
+}
