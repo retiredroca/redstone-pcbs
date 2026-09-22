@@ -7,13 +7,13 @@ save-persistent redstone board inside a single block.
 
 ## What it does
 
-- **PCB block** - right-click to open a layer-based circuit editor. The board is a 16x16x16 voxel
-  grid shown as an `X`/`Y`/`Z` slice or as an isometric view from any of the eight cube corners;
-  the face you interact with chooses the starting axis. Left-click places the selected part,
-  `Shift`+left-click erases, right-click interacts (toggles levers/buttons), `R` rotates the hovered
-  part, `D` cycles a repeater's delay, `M` toggles comparator mode, and the scroll wheel changes the
-  layer (slices) or zooms (iso). Parts show their vanilla item icon, and the side palette is an
-  inventory-style list with names, counts and tooltips.
+- **PCB block** - right-click to open the board editor. The board is a 16x16x16 voxel grid shown in an
+  orthographic 3D view: drag to orbit, `Ctrl`+drag to pan, `Ctrl`+scroll to zoom toward the cursor, and
+  the scroll wheel (or the layer buttons) to step the active layer. Left-click places the selected
+  part, `Shift`+left-click erases, right-click interacts (toggles levers/buttons), `R` rotates the
+  hovered part, `D` cycles a repeater's delay, `M` toggles comparator mode, and a Reset button recentres
+  the view. Parts show their vanilla item icon, and the side palette is an inventory-style list with
+  names, counts and tooltips.
 - **Real redstone parts** - dust, torches, repeaters, comparators, blocks of redstone, levers,
   buttons, solid blocks and lamps, with vanilla-like signal strength, weak/strong power and delays.
   The simulation is deterministic (no quasi-connectivity / update-order quirks) and runs on the
@@ -23,13 +23,14 @@ save-persistent redstone board inside a single block.
 - **Attached parts** - because each face joins the world's redstone, pistons, dispensers,
   droppers, note blocks, doors, lamps and rails can be driven from the board, observers pulse on its
   output, and a comparator in the board can read a chest/hopper/barrel touching a face.
-- **Blueprints** - sneak-right-click a board with a blueprint to copy its circuit; sneak-right-click
-  with a filled blueprint to stamp it back.
-- **PCB Workbench** - right-click to open a GUI: put a filled blueprint and a blank PCB in, take out
-  a configured PCB item. Placing a configured PCB item seeds the board with that circuit.
+- **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
+  world). "Save Design" costs one paper in survival, and loading a design back onto a board consumes
+  the matching items in survival.
 
-Components are the vanilla items (redstone, torch, repeater, comparator, lever, button, stone,
-lamp). Placing a part in the editor consumes the matching item in survival; removing it refunds.
+Components are the vanilla items (redstone, torch, repeater, comparator, block of redstone, lever,
+button, stone, glass, lamp, observer, note block, hopper). Placing a part in the editor consumes the
+matching item in survival and removing it refunds; in survival the palette only offers parts you are
+holding or can craft from your inventory.
 
 ## Build
 
@@ -60,8 +61,11 @@ their metadata carry the full version. Override with `-PversionStamp=<stamp>` or
 versions/<mc>/<module>/
 ├─ common/                 # engine + gameplay (loader-agnostic)          -> relocated per loader
 │  ├─ .../chip/            # pure-Java redstone engine (unit-tested, no Minecraft imports)
-│  ├─ .../block/           # PcbBlock, PcbBlockEntity, PcbWorkbenchBlock
-│  ├─ .../item/            # BlueprintItem
+│  ├─ .../block/           # PcbBlock, PcbBlockEntity
+│  ├─ .../item/            # PcbItem (block item carrying the saved chip component)
+│  ├─ .../content/         # registry ids shared by both loaders
+│  ├─ .../craft/           # survival item consume/craft logic for parts
+│  ├─ .../data/            # saved designs (SavedData) + chip component
 │  ├─ .../net/             # editor payloads + server-side edit handling
 │  ├─ .../platform/        # loader abstraction implemented by each loader
 │  ├─ .../client/          # editor screen (client-only, never loaded on a dedicated server)
@@ -74,5 +78,4 @@ enginetest/                # standalone JUnit project for the chip engine
 The two loader builds each compile `common/` into a loader-specific relocated package and are merged
 into a single universal jar.
 
-See `PROJECT-GUIDE.md` for building and adding Minecraft versions, `RELEASE-GUIDE.md` for releases,
-and `AGENTS.md` for repository conventions.
+See `PROJECT-GUIDE.md` for building and adding Minecraft versions and `RELEASE-GUIDE.md` for releases.
