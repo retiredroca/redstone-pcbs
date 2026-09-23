@@ -31,8 +31,10 @@ public final class Cell {
      * block entity each tick. Only read by adjacent comparators; not derived by the simulation.
      */
     public int analog;
-    /** Redstone dust horizontal connections: bit0 N, bit1 E, bit2 S, bit3 W. Default is a cross. */
-    public int dustMask = 0x0F;
+    /** Redstone dust horizontal connections: bit0 N, bit1 E, bit2 S, bit3 W. Auto-derived. */
+    public int dustMask;
+    /** Redstone dust "climb" connections (a wire going up a block side): bit0 N, bit1 E, bit2 S, bit3 W. */
+    public int dustUpMask;
 
     long pendingAt = -1L;
 
@@ -52,7 +54,8 @@ public final class Cell {
         analog = 0;
         pendingAt = -1L;
         watchSig = Integer.MIN_VALUE;
-        dustMask = 0x0F;
+        dustMask = 0;
+        dustUpMask = 0;
     }
 
     public void copyFrom(Cell other) {
@@ -67,6 +70,7 @@ public final class Cell {
         locked = other.locked;
         analog = other.analog;
         dustMask = other.dustMask;
+        dustUpMask = other.dustUpMask;
     }
 
     public boolean isEmpty() {

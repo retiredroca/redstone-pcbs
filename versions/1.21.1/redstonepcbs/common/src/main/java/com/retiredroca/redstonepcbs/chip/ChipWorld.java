@@ -18,7 +18,7 @@ import java.util.TreeSet;
  */
 public final class ChipWorld {
     public static final int SIZE = 16;
-    public static final int FORMAT_VERSION = 4;
+    public static final int FORMAT_VERSION = 5;
 
     private static final int INDEX_BITS = 12;
     private static final int INDEX_MASK = (1 << INDEX_BITS) - 1;
@@ -158,11 +158,14 @@ public final class ChipWorld {
             c.powered = desiredTorchLit(index);
         }
         markDirty();
+        refreshDustShapesAround(index);
     }
 
     public void clear(int x, int y, int z) {
-        cells[index(x, y, z)].reset();
+        int index = index(x, y, z);
+        cells[index].reset();
         markDirty();
+        refreshDustShapesAround(index);
     }
 
     /** Rotates a directional part to the next direction in its facing family's order. */
@@ -186,6 +189,7 @@ public final class ChipWorld {
                 if (hasSupport(index, candidate)) {
                     c.facing = candidate;
                     markDirty();
+                    refreshDustShapesAround(index);
                     return;
                 }
             }
@@ -193,6 +197,7 @@ public final class ChipWorld {
         }
         c.facing = order[(start + 1) % order.length];
         markDirty();
+        refreshDustShapesAround(index);
     }
 
     /** True when the neighbour of {@code index} in {@code dir} can support a torch. The board's
@@ -245,7 +250,9 @@ public final class ChipWorld {
             setLever(index, !c.on);
         } else if (c.part == Part.BUTTON) {
             pressButton(index);
-        } else if (c.part == Part.DUST) {
+        } else if (c.part == Part.DUST && c.dustMask == 0 && c.dustUpMask == 0) {
+            // Vanilla: a wire can only be shaped by hand when it is isolated; with any neighbour
+            // it shapes itself automatically.
             cycleDustShape(index);
         }
     }
@@ -293,16 +300,113 @@ public final class ChipWorld {
         };
     }
 
+    private static final int DUST_NONE = 0;
+    private static final int DUST_SIDE = 1;
+    private static final int DUST_UP = 2;
+
+    /** True when the cell at {@code index} is a conductor (solid block or hopper). */
+    private boolean isConductorAt(int index) {
+        return index >= 0 && cells[index].part.isConductive();
+    }
+
     /**
-     * Dust-to-dust horizontal connections follow the shape; vertical connections are always on.
-     * Connections to non-dust parts (sources, repeaters, the block below) are not gated, so a dot
-     * still reads its neighbours and weakly powers the block under it.
+     * Whether a wire connects to its neighbour in {@code d} (mirrors vanilla
+     * {@code RedStoneWireBlock.shouldConnectTo}): wires always connect, repeaters only along their
+     * facing axis, observers only on the side they output, and other signal sources on any side.
      */
-    private boolean dustConnects(int self, Dir d, int other) {
-        if (d.isVertical()) {
+    private boolean dustConnectsTo(int index, Dir d) {
+        int n = neighbour(index, d);
+        if (n < 0) {
             return true;
         }
-        return (cells[self].dustMask & bit(d)) != 0 && (cells[other].dustMask & bit(d.opposite())) != 0;
+        Cell c = cells[n];
+        return switch (c.part) {
+            case DUST, TORCH, LEVER, BUTTON, REDSTONE_BLOCK, COMPARATOR -> true;
+            case REPEATER -> d == c.facing || d == c.facing.opposite();
+            case OBSERVER -> d == c.facing;
+            default -> false;
+        };
+    }
+
+    /** The side state of the wire at {@code index} toward {@code d}: NONE, SIDE or UP (climb). */
+    private int dustSide(int index, Dir d) {
+        int n = neighbour(index, d);
+        if (n < 0) {
+            // The board's face joins the world, so a boundary wire always points outward.
+            return DUST_SIDE;
+        }
+        if (!isConductorAt(neighbour(index, Dir.UP)) && isConductorAt(n)) {
+            int up = neighbour(n, Dir.UP);
+            if (up >= 0 && cells[up].part == Part.DUST) {
+                return DUST_UP;
+            }
+        }
+        if (dustConnectsTo(index, d)) {
+            return DUST_SIDE;
+        }
+        if (isConductorAt(n)) {
+            return DUST_NONE;
+        }
+        int down = neighbour(n, Dir.DOWN);
+        return down >= 0 && cells[down].part == Part.DUST ? DUST_SIDE : DUST_NONE;
+    }
+
+    /** Recomputes the shape of the wire at {@code index} from its neighbours. */
+    private void refreshDustShape(int index) {
+        Cell c = cells[index];
+        if (c.part != Part.DUST) {
+            return;
+        }
+        int sides = 0;
+        int up = 0;
+        for (Dir d : Part.HORIZONTAL_ORDER) {
+            int s = dustSide(index, d);
+            if (s == DUST_SIDE) {
+                sides |= bit(d);
+            } else if (s == DUST_UP) {
+                up |= bit(d);
+            }
+        }
+        if (c.dustMask != sides || c.dustUpMask != up) {
+            c.dustMask = sides;
+            c.dustUpMask = up;
+            markDirty();
+        }
+    }
+
+    /** Refreshes the wire at {@code index} and every wire within one block (3x3x3). */
+    private void refreshDustShapesAround(int index) {
+        int x = xOf(index);
+        int y = yOf(index);
+        int z = zOf(index);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (inBounds(x + dx, y + dy, z + dz)) {
+                        refreshDustShape(index(x + dx, y + dy, z + dz));
+                    }
+                }
+            }
+        }
+    }
+
+    /** Re-derives every wire's shape (used after loading a board). */
+    public void refreshAllDustShapes() {
+        for (int i = 0; i < cellCount; i++) {
+            refreshDustShape(i);
+        }
+    }
+
+    /** Whether the wire at {@code index} emits toward {@code out} (vanilla {@code getSignal}). */
+    private boolean dustEmitsTo(int index, Dir out) {
+        if (out == Dir.UP) {
+            return false;
+        }
+        if (out == Dir.DOWN) {
+            return true;
+        }
+        int b = bit(out);
+        return (cells[index].dustMask & b) != 0 || (cells[index].dustUpMask & b) != 0;
     }
 
     // --- face I/O ---------------------------------------------------------------------------------
@@ -641,6 +745,8 @@ public final class ChipWorld {
     }
 
     private int computeDustPower(int index) {
+        // Non-wire signals from the six direct neighbours (vanilla getBestNeighborSignal, computed
+        // with wires excluded).
         int best = 0;
         for (Dir d : Dir.VALUES) {
             int n = neighbour(index, d);
@@ -648,16 +754,31 @@ public final class ChipWorld {
                 best = Math.max(best, faceInput[d.ordinal()]);
                 continue;
             }
-            Cell c = cells[n];
-            if (c.part == Part.DUST) {
-                if (dustConnects(index, d, n)) {
-                    best = Math.max(best, c.power - 1);
-                }
-            } else {
+            if (cells[n].part != Part.DUST) {
                 best = Math.max(best, inputPower(index, d));
             }
         }
-        return Math.max(0, best);
+        // Adjacent wires, including one-block climbs and descents, decay by one.
+        int j = 0;
+        for (Dir d : Part.HORIZONTAL_ORDER) {
+            int n = neighbour(index, d);
+            if (n < 0) {
+                continue;
+            }
+            j = Math.max(j, wirePower(n));
+            if (isConductorAt(n)) {
+                if (!isConductorAt(neighbour(index, Dir.UP))) {
+                    j = Math.max(j, wirePower(neighbour(n, Dir.UP)));
+                }
+            } else {
+                j = Math.max(j, wirePower(neighbour(n, Dir.DOWN)));
+            }
+        }
+        return Math.max(0, Math.max(best, j - 1));
+    }
+
+    private int wirePower(int index) {
+        return index >= 0 && cells[index].part == Part.DUST ? cells[index].power : 0;
     }
 
     private boolean isStronglyPowered(int solidIndex) {
@@ -710,7 +831,7 @@ public final class ChipWorld {
         return switch (c.part) {
             case AIR, SOLID, LAMP, GLASS, HOPPER, NOTE_BLOCK, FURNACE, BLAST_FURNACE, SMOKER,
                     BREWING_STAND, CRAFTER -> 0;
-            case DUST -> c.power;
+            case DUST -> dustEmitsTo(index, out) ? c.power : 0;
             case REDSTONE_BLOCK -> 15;
             case LEVER, BUTTON -> c.on ? 15 : 0;
             case OBSERVER -> (c.powered && out == c.facing.opposite()) ? 15 : 0;

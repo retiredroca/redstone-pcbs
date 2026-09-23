@@ -44,10 +44,10 @@ public final class BoardStates {
                     .setValue(RedstoneLampBlock.LIT, cell.powered);
             case DUST -> Blocks.REDSTONE_WIRE.defaultBlockState()
                     .setValue(RedStoneWireBlock.POWER, clamp(cell.power))
-                    .setValue(RedStoneWireBlock.NORTH, side(cell.dustMask, 1))
-                    .setValue(RedStoneWireBlock.EAST, side(cell.dustMask, 2))
-                    .setValue(RedStoneWireBlock.SOUTH, side(cell.dustMask, 4))
-                    .setValue(RedStoneWireBlock.WEST, side(cell.dustMask, 8));
+                    .setValue(RedStoneWireBlock.NORTH, wireSide(cell, 1))
+                    .setValue(RedStoneWireBlock.EAST, wireSide(cell, 2))
+                    .setValue(RedStoneWireBlock.SOUTH, wireSide(cell, 4))
+                    .setValue(RedStoneWireBlock.WEST, wireSide(cell, 8));
             case TORCH -> torchState(facing, cell.powered);
             case REPEATER -> Blocks.REPEATER.defaultBlockState()
                     .setValue(RepeaterBlock.FACING, Directions.toMinecraft(facing))
@@ -124,7 +124,10 @@ public final class BoardStates {
                 .setValue(RedstoneTorchBlock.LIT, powered);
     }
 
-    private static RedstoneSide side(int mask, int bit) {
-        return (mask & bit) != 0 ? RedstoneSide.SIDE : RedstoneSide.NONE;
+    private static RedstoneSide wireSide(Cell cell, int bit) {
+        if ((cell.dustUpMask & bit) != 0) {
+            return RedstoneSide.UP;
+        }
+        return (cell.dustMask & bit) != 0 ? RedstoneSide.SIDE : RedstoneSide.NONE;
     }
 }

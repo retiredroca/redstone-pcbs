@@ -4,19 +4,20 @@ package com.retiredroca.redstonepcbs.chip;
  * Compact, versioned binary serialization for a {@link ChipWorld}.
  *
  * <pre>
- *   v4 header: version, sizeX, sizeY, sizeZ, flags(bit0 = simple hopper mode)
+ *   v5 header: version, sizeX, sizeY, sizeZ, flags(bit0 = simple hopper mode)
  *   per cell (4 bytes):
  *     byte 0: part ordinal (low 5 bits) | facing ordinal (high 3 bits)
  *     byte 1: signal power/strength (low nibble) | delay (high nibble)
- *     byte 2: flags - bit0 powered, bit1 subtract, bit2 on, bit3 locked | dustMask (high nibble)
- *     byte 3: container analog output (low nibble)
+ *     byte 2: flags - bit0 powered, bit1 subtract, bit2 on, bit3 locked | dust sides (high nibble)
+ *     byte 3: dust climb sides (low nibble) | container analog output (high nibble)
  * </pre>
  *
- * <p>v1-v3 used 3 bytes per cell with the part in the low nibble (at most 16 parts). v4 widens the
- * part field to 5 bits and adds the per-cell container analog value.
+ * <p>v1-v3 used 3 bytes per cell with the part in the low nibble (at most 16 parts). v4 widened the
+ * part field to 5 bits and added the per-cell container analog value. v5 packs the dust "climb"
+ * sides into byte 3 (v4 stored the analog in the low nibble there).
  *
  * <p>Derived state (a solid block's weak power, pending delays, observer watch state) is not stored;
- * it is recomputed on the first tick after loading.
+ * it is recomputed on the first tick after loading. Dust shapes are re-derived after loading too.
  */
 public final class ChipSerializer {
     private ChipSerializer() {}
@@ -42,7 +43,7 @@ public final class ChipSerializer {
                     | (c.locked ? 8 : 0)
                     | ((c.dustMask & 0x0F) << 4);
             data[p++] = (byte) flags;
-            data[p++] = (byte) (c.analog & 0x0F);
+            data[p++] = (byte) ((c.dustUpMask & 0x0F) | ((c.analog & 0x0F) << 4));
         }
         return data;
     }
@@ -81,7 +82,13 @@ public final class ChipSerializer {
             if (version >= 4) {
                 c.part = Part.byOrdinal(b0 & 0x1F);
                 c.facing = Dir.byOrdinal((b0 >> 5) & 0x07);
-                c.analog = data[p++] & 0x0F;
+                int b3 = data[p++] & 0xFF;
+                if (version >= 5) {
+                    c.dustUpMask = b3 & 0x0F;
+                    c.analog = (b3 >> 4) & 0x0F;
+                } else {
+                    c.analog = b3 & 0x0F;
+                }
             } else {
                 c.part = Part.byOrdinal(b0 & 0x0F);
                 c.facing = Dir.byOrdinal((b0 >> 4) & 0x07);
@@ -94,6 +101,7 @@ public final class ChipSerializer {
             c.locked = (b2 & 8) != 0;
             c.dustMask = version >= 3 ? (b2 >> 4) & 0x0F : 0x0F;
         }
+        world.refreshAllDustShapes();
         world.markDirty();
         return world;
     }

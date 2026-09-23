@@ -206,30 +206,72 @@ class ChipWorldTest {
     }
 
     @Test
-    void dustShapeControlsPropagation() {
+    void dustAutoShapesFromNeighbours() {
         ChipWorld w = new ChipWorld();
-        place(w, 0, 0, 0, Part.REDSTONE_BLOCK, Dir.UP);
-        place(w, 1, 0, 0, Part.DUST, Dir.UP);
-        place(w, 2, 0, 0, Part.DUST, Dir.UP);
-        int d1 = w.index(1, 0, 0);
+        // Isolated wire is a dot.
+        place(w, 5, 5, 5, Part.DUST, Dir.UP);
+        assertEquals(0, w.cell(5, 5, 5).dustMask, "an isolated wire is a dot");
+        assertEquals(0, w.cell(5, 5, 5).dustUpMask);
+
+        // Beside a source it points at it (EAST bit).
+        place(w, 6, 5, 5, Part.REDSTONE_BLOCK, Dir.UP);
+        assertEquals(2, w.cell(5, 5, 5).dustMask, "wire points at the adjacent source");
+
+        // Two wires connect to each other.
+        place(w, 4, 5, 5, Part.DUST, Dir.UP);
+        assertEquals(2 | 8, w.cell(5, 5, 5).dustMask, "wire connects east and west");
+        assertEquals(2, w.cell(4, 5, 5).dustMask, "the other wire connects east");
+
+        // Removing a neighbour clears the side again.
+        w.clear(4, 5, 5);
+        assertEquals(2, w.cell(5, 5, 5).dustMask, "removed neighbour clears the west side");
+
+        // An L: source south, wire north.
+        ChipWorld l = new ChipWorld();
+        place(l, 5, 5, 5, Part.DUST, Dir.UP);
+        place(l, 5, 5, 6, Part.DUST, Dir.UP);
+        place(l, 5, 5, 7, Part.REDSTONE_BLOCK, Dir.UP);
+        assertEquals(4, l.cell(5, 5, 5).dustMask, "corner points south");
+        assertEquals(1 | 4, l.cell(5, 5, 6).dustMask, "middle wire points north and south");
+
+        // A cross when wires are on all four sides.
+        ChipWorld c = new ChipWorld();
+        place(c, 5, 5, 5, Part.DUST, Dir.UP);
+        place(c, 4, 5, 5, Part.DUST, Dir.UP);
+        place(c, 6, 5, 5, Part.DUST, Dir.UP);
+        place(c, 5, 5, 4, Part.DUST, Dir.UP);
+        place(c, 5, 5, 6, Part.DUST, Dir.UP);
+        assertEquals(0x0F, c.cell(5, 5, 5).dustMask, "wires on all sides form a cross");
+    }
+
+    @Test
+    void dustClimbsUpTheSideOfABlock() {
+        ChipWorld w = new ChipWorld();
+        place(w, 1, 0, 5, Part.DUST, Dir.UP);
+        place(w, 2, 0, 5, Part.SOLID, Dir.UP);
+        place(w, 2, 1, 5, Part.DUST, Dir.UP);
+        place(w, 3, 1, 5, Part.REDSTONE_BLOCK, Dir.UP);
 
         w.settleNow();
-        assertEquals(15, w.cell(1, 0, 0).power, "a cross receives from the adjacent source");
-        assertEquals(14, w.cell(2, 0, 0).power, "and passes it to the next dust");
 
-        w.cell(d1).dustMask = 0x00;
-        w.settleNow();
-        assertEquals(15, w.cell(1, 0, 0).power, "a dot is still powered by the adjacent source");
-        assertEquals(0, w.cell(2, 0, 0).power, "but does not feed the neighbouring dust");
+        // The upper wire is powered by the source, and the lower one climbs up to it (EAST = UP).
+        assertEquals(15, w.cell(2, 1, 5).power);
+        assertEquals(2, w.cell(1, 0, 5).dustUpMask, "the lower wire climbs east");
+        assertEquals(14, w.cell(1, 0, 5).power, "power climbs the block with one step of decay");
+    }
 
-        w.cell(d1).dustMask = 0x05;
-        w.settleNow();
-        assertEquals(0, w.cell(2, 0, 0).power, "a north-south line blocks east-west dust");
+    @Test
+    void dustDescendsToAWireBelowAnAdjacentBlock() {
+        ChipWorld w = new ChipWorld();
+        place(w, 2, 1, 5, Part.DUST, Dir.UP);
+        place(w, 3, 0, 5, Part.DUST, Dir.UP);
+        place(w, 4, 0, 5, Part.REDSTONE_BLOCK, Dir.UP);
 
-        w.cell(d1).dustMask = 0x0A;
         w.settleNow();
-        assertEquals(15, w.cell(1, 0, 0).power);
-        assertEquals(14, w.cell(2, 0, 0).power, "an east-west line connects the dusts again");
+
+        // (3,1,5) is air, so the upper wire reads the wire one block below it to the east.
+        assertEquals(2, w.cell(2, 1, 5).dustMask, "the upper wire connects east");
+        assertEquals(14, w.cell(2, 1, 5).power, "power descends with one step of decay");
     }
 
     @Test
@@ -237,7 +279,6 @@ class ChipWorldTest {
         ChipWorld w = new ChipWorld();
         place(w, 1, 0, 0, Part.SOLID, Dir.UP);
         place(w, 1, 1, 0, Part.DUST, Dir.UP);
-        w.cell(w.index(1, 1, 0)).dustMask = 0x00;
         place(w, 0, 1, 0, Part.REDSTONE_BLOCK, Dir.UP);
 
         w.settleNow();

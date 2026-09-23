@@ -6,6 +6,7 @@ import com.retiredroca.redstonepcbs.chip.Part;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.MenuProvider;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.level.block.entity.BlastFurnaceBlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -55,14 +56,83 @@ public abstract class BoardComponent {
 
     public static BoardComponent create(Part part, BlockPos pos, BlockState state) {
         return switch (part) {
-            case FURNACE -> new Furnace(part, new FurnaceBlockEntity(pos, state));
-            case BLAST_FURNACE -> new Furnace(part, new BlastFurnaceBlockEntity(pos, state));
-            case SMOKER -> new Furnace(part, new SmokerBlockEntity(pos, state));
-            case BREWING_STAND -> new Brewing(part, new BrewingStandBlockEntity(pos, state));
-            case CRAFTER -> new Crafter(part, new CrafterBlockEntity(pos, state));
-            case HOPPER -> new Hopper(part, new HopperBlockEntity(pos, state));
+            case FURNACE -> new Furnace(part, new BoardFurnaceEntity(pos, state));
+            case BLAST_FURNACE -> new Furnace(part, new BoardBlastFurnaceEntity(pos, state));
+            case SMOKER -> new Furnace(part, new BoardSmokerEntity(pos, state));
+            case BREWING_STAND -> new Brewing(part, new BoardBrewingEntity(pos, state));
+            case CRAFTER -> new Crafter(part, new BoardCrafterEntity(pos, state));
+            case HOPPER -> new Hopper(part, new BoardHopperEntity(pos, state));
             default -> null;
         };
+    }
+
+    // The board's virtual positions sit up to 15 blocks from the real board, so the vanilla
+    // distance check in stillValid would immediately close any menu. These subclasses accept it.
+
+    private static final class BoardFurnaceEntity extends FurnaceBlockEntity {
+        BoardFurnaceEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+    }
+
+    private static final class BoardBlastFurnaceEntity extends BlastFurnaceBlockEntity {
+        BoardBlastFurnaceEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+    }
+
+    private static final class BoardSmokerEntity extends SmokerBlockEntity {
+        BoardSmokerEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+    }
+
+    private static final class BoardBrewingEntity extends BrewingStandBlockEntity {
+        BoardBrewingEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+    }
+
+    private static final class BoardCrafterEntity extends CrafterBlockEntity {
+        BoardCrafterEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+    }
+
+    private static final class BoardHopperEntity extends HopperBlockEntity {
+        BoardHopperEntity(BlockPos pos, BlockState state) {
+            super(pos, state);
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
     }
 
     private static final class Furnace extends BoardComponent {

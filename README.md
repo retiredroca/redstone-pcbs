@@ -20,8 +20,9 @@ save-persistent redstone board inside a single block.
   with names, counts and tooltips.
 - **Real redstone parts** - dust, torches, repeaters, comparators, blocks of redstone, levers,
   buttons, solid blocks and lamps, with vanilla-like signal strength, weak/strong power and delays.
-  The simulation is deterministic (no quasi-connectivity / update-order quirks) and runs on the
-  server.
+  Redstone dust shapes itself from its neighbours (line, corner, cross, or climbing up the side of a
+  block) and can only be shaped by hand while isolated. The simulation is deterministic (no
+  quasi-connectivity / update-order quirks) and runs on the server.
 - **Six-sided I/O** - each face of the board participates in redstone with whatever block touches
   it: adjacent signals feed the boundary cells, and boundary emitters drive the adjacent block.
 - **Attached parts** - because each face joins the world's redstone, pistons, dispensers,

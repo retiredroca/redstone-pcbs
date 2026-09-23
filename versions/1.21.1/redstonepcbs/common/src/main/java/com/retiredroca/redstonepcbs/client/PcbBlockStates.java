@@ -22,7 +22,8 @@ public final class PcbBlockStates {
                 | ((cell.subtract ? 1L : 0L) << 13)
                 | ((cell.on ? 1L : 0L) << 14)
                 | ((long) (cell.dustMask & 0xF) << 15)
-                | ((long) (cell.delay & 0x7) << 19);
+                | ((long) (cell.delay & 0x7) << 19)
+                | ((long) (cell.dustUpMask & 0xF) << 22);
         return CACHE.computeIfAbsent(key, k -> BoardStates.of(cell));
     }
 }
