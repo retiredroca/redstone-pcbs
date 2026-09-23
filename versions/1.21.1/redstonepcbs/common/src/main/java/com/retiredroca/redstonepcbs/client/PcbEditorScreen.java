@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.ChipSerializer;
 import com.retiredroca.redstonepcbs.chip.ChipWorld;
 import com.retiredroca.redstonepcbs.chip.Dir;
@@ -103,6 +104,8 @@ public class PcbEditorScreen extends Screen {
     private boolean canSaveDesign;
     private boolean libraryOpen;
     private int libraryScroll;
+    private boolean filterOpen;
+    private int filterCell;
 
     public PcbEditorScreen(int kind, BlockPos pos, int slot, int faceOrdinal) {
         super(Component.translatable("screen.redstonepcbs.editor"));
@@ -188,6 +191,11 @@ public class PcbEditorScreen extends Screen {
         if (libraryOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderLibrary(graphics, mouseX, mouseY);
+            return;
+        }
+        if (filterOpen) {
+            graphics.fill(0, 0, this.width, this.height, 0xC0000000);
+            renderFilter(graphics, mouseX, mouseY);
             return;
         }
 
@@ -503,6 +511,15 @@ public class PcbEditorScreen extends Screen {
             }
             return true;
         }
+        if (filterOpen) {
+            for (Button b : buttons) {
+                if (b.contains(mouseX, mouseY)) {
+                    b.action.run();
+                    return true;
+                }
+            }
+            return true;
+        }
         for (Button b : buttons) {
             if (b.contains(mouseX, mouseY)) {
                 b.action.run();
@@ -566,13 +583,11 @@ public class PcbEditorScreen extends Screen {
             if (hoverBlock != null) {
                 int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
                 Part part = local.cell(index).part;
-                boolean hopperFilter = part == Part.HOPPER && local.isSimpleHopperMode();
+                boolean hopperFilter = part == Part.HOPPER && local.isFilterHopperMode();
                 if (hopperFilter && kind == C2SEditPayload.KIND_BLOCK) {
-                    if (hasShiftDown()) {
-                        send(C2SEditPayload.ACTION_CLEAR_FILTER, index, null, null, false);
-                    } else {
-                        send(C2SEditPayload.ACTION_SET_FILTER, index, selected, null, false);
-                    }
+                    // Simple-mode hoppers open a filter picker instead of a container UI.
+                    filterOpen = true;
+                    filterCell = index;
                 } else if (part.isContainer() && kind == C2SEditPayload.KIND_BLOCK) {
                     EditorReturn.stash(this);
                     send(C2SEditPayload.ACTION_OPEN_UI, index, null, null, false);
@@ -828,7 +843,7 @@ public class PcbEditorScreen extends Screen {
         y += BTN_H + 4;
 
         int libW = 56;
-        String hopperLabel = local.isSimpleHopperMode() ? "Hopper: Easy" : "Hopper: Normal";
+        String hopperLabel = local.isFilterHopperMode() ? "Hopper: Filter" : "Hopper: Vanilla";
         int hopW = Math.max(56, this.font.width(hopperLabel) + 6);
         addButton(graphics, px, y, libW, BTN_H, "Library", () -> {
             libraryOpen = true;
@@ -913,6 +928,45 @@ public class PcbEditorScreen extends Screen {
         addButton(graphics, x + w - 60, by, 52, 14, "Close", () -> libraryOpen = false);
     }
 
+    /** Filter-mode hopper: pick the single item that is allowed through. */
+    private void renderFilter(GuiGraphics graphics, int mouseX, int mouseY) {
+        int cols = 5;
+        int cell = 24;
+        int rows = (int) Math.ceil(PcbIcons.PALETTE.length / (double) cols);
+        int w = cols * cell + 16;
+        int h = 44 + rows * cell + 24;
+        int x = (this.width - w) / 2;
+        int y = (this.height - h) / 2;
+        graphics.fill(x, y, x + w, y + h, 0xFF202020);
+        graphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0xFF3C3C3C);
+        graphics.drawString(this.font, "Hopper Filter", x + 8, y + 8, 0xFFFFFF, false);
+        graphics.drawString(this.font, "pick one item; only it passes through", x + 8, y + 19, 0x909090, false);
+
+        int gx = x + 8;
+        int gy = y + 34;
+        for (int i = 0; i < PcbIcons.PALETTE.length; i++) {
+            Part part = PcbIcons.PALETTE[i];
+            int sx = gx + (i % cols) * cell;
+            int sy = gy + (i / cols) * cell;
+            boolean hovered = mouseX >= sx && mouseX < sx + cell - 2 && mouseY >= sy && mouseY < sy + cell - 2;
+            graphics.fill(sx, sy, sx + cell - 2, sy + cell - 2, hovered ? 0xFFFFE080 : 0xFF373737);
+            graphics.fill(sx + 1, sy + 1, sx + cell - 3, sy + cell - 3, 0xFF8B8B8B);
+            drawItem(graphics, PcbIcons.stackFor(part), sx + 3, sy + 3, 16);
+            final Part filterPart = part;
+            buttons.add(new Button(sx, sy, cell - 2, cell - 2, () -> {
+                send(C2SEditPayload.ACTION_SET_FILTER, filterCell, filterPart, null, false);
+                filterOpen = false;
+            }));
+        }
+
+        int by = y + h - 20;
+        addButton(graphics, x + 8, by, 64, BTN_H, "Clear", () -> {
+            send(C2SEditPayload.ACTION_CLEAR_FILTER, filterCell, null, null, false);
+            filterOpen = false;
+        });
+        addButton(graphics, x + w - 72, by, 64, BTN_H, "Close", () -> filterOpen = false);
+    }
+
     private void drawItem(GuiGraphics graphics, ItemStack stack, int x, int y, int size) {
         if (stack.isEmpty()) {
             return;
@@ -935,7 +989,8 @@ public class PcbEditorScreen extends Screen {
             }
         }
         if (hoverBlock != null) {
-            var c = local.cell(local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]));
+            int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
+            var c = local.cell(index);
             List<Component> lines = new ArrayList<>();
             lines.add(PcbIcons.nameOf(c.part));
             if (c.part == Part.DUST) {
@@ -944,6 +999,25 @@ public class PcbEditorScreen extends Screen {
                 lines.add(Component.literal("delay " + (c.delay + 1)));
             } else if (c.part == Part.COMPARATOR) {
                 lines.add(Component.literal(c.subtract ? "subtract" : "compare"));
+            }
+            if (c.part.isContainer() && kind == C2SEditPayload.KIND_BLOCK && this.minecraft != null
+                    && this.minecraft.level != null
+                    && this.minecraft.level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
+                if (c.part == Part.HOPPER && local.isFilterHopperMode()) {
+                    ItemStack filter = be.filter();
+                    lines.add(filter.isEmpty()
+                            ? Component.literal("filter: none")
+                            : Component.literal("filter: ").append(filter.getHoverName()));
+                } else {
+                    List<ItemStack> contents = be.contentsView(index);
+                    if (contents.isEmpty()) {
+                        lines.add(Component.literal("empty"));
+                    } else {
+                        for (ItemStack stack : contents) {
+                            lines.add(Component.literal(stack.getCount() + "x ").append(stack.getHoverName()));
+                        }
+                    }
+                }
             }
             graphics.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
         }

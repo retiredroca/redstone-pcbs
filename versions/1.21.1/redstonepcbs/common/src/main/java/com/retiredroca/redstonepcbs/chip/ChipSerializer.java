@@ -4,7 +4,7 @@ package com.retiredroca.redstonepcbs.chip;
  * Compact, versioned binary serialization for a {@link ChipWorld}.
  *
  * <pre>
- *   v5 header: version, sizeX, sizeY, sizeZ, flags(bit0 = simple hopper mode)
+ *   v5 header: version, sizeX, sizeY, sizeZ, flags(bit0 = filter hopper mode)
  *   per cell (4 bytes):
  *     byte 0: part ordinal (low 5 bits) | facing ordinal (high 3 bits)
  *     byte 1: signal power/strength (low nibble) | delay (high nibble)
@@ -31,7 +31,7 @@ public final class ChipSerializer {
         data[1] = (byte) sizeX;
         data[2] = (byte) sizeY;
         data[3] = (byte) sizeZ;
-        data[4] = (byte) (world.isSimpleHopperMode() ? 1 : 0);
+        data[4] = (byte) (world.isFilterHopperMode() ? 1 : 0);
         int p = 5;
         for (int i = 0; i < world.cellCount(); i++) {
             Cell c = world.cell(i);
@@ -65,7 +65,7 @@ public final class ChipSerializer {
             if (data.length < 5) {
                 return world;
             }
-            world.setSimpleHopperMode((data[4] & 1) != 0);
+            world.setFilterHopperMode((data[4] & 1) != 0);
             p = 5;
         } else {
             p = 4;

@@ -64,7 +64,7 @@ public final class ModNetwork {
             Part filterPart = payload.action() == C2SEditPayload.ACTION_CLEAR_FILTER
                     ? Part.AIR : Part.byOrdinal(payload.part());
             Item filterItem = itemFor(filterPart);
-            be.setFilter(payload.index(), filterItem == null ? ItemStack.EMPTY : new ItemStack(filterItem));
+            be.setFilter(filterItem == null ? ItemStack.EMPTY : new ItemStack(filterItem));
             be.onEdited();
             RedstonePcbs.platform().sendToPlayer(player,
                     S2CSnapshotPayload.block(payload.pos(), ChipSerializer.write(chip)));

@@ -38,21 +38,22 @@ public final class ChipWorld {
 
     private long tick;
     private boolean dirty = true;
-    private boolean simpleHopperMode = true;
+    private boolean filterHopperMode = true;
 
-    public boolean isSimpleHopperMode() {
-        return simpleHopperMode;
+    /** Filter mode: a hopper holds one filter item and only passes matching items through. */
+    public boolean isFilterHopperMode() {
+        return filterHopperMode;
     }
 
-    public void setSimpleHopperMode(boolean simple) {
-        if (simpleHopperMode != simple) {
-            simpleHopperMode = simple;
+    public void setFilterHopperMode(boolean filter) {
+        if (filterHopperMode != filter) {
+            filterHopperMode = filter;
             markDirty();
         }
     }
 
     public void toggleHopperMode() {
-        simpleHopperMode = !simpleHopperMode;
+        filterHopperMode = !filterHopperMode;
         markDirty();
     }
 

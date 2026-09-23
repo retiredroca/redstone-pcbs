@@ -31,11 +31,15 @@ save-persistent redstone board inside a single block.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
   world). "Save Design" costs one paper in survival, and loading a design back onto a board consumes
   the matching items in survival.
-- **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or (in normal
+- **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or (in vanilla
   hopper mode) a hopper inside the board. Right-click one in the editor to open its normal vanilla UI,
   and it processes exactly like the world block (smelting, brewing, crafting, item transfer); adjacent
-  comparators read its signal strength. Breaking the board or removing a container spills its contents
-  instead of deleting them.
+  comparators read its signal strength. Hovering a container shows its contents in the tooltip.
+  Breaking the board or removing a container spills its contents instead of deleting them.
+- **Hopper modes** - the editor's Hopper button switches between **filter** and **vanilla** mode. In
+  filter mode a hopper holds a single filter item (right-click the hopper to pick it) and the gate
+  only lets matching items through; in vanilla mode the hopper runs its full 5-slot vanilla UI and
+  logic.
 
 Components are the vanilla items (redstone, torch, repeater, comparator, block of redstone, lever,
 button, stone, glass, lamp, observer, note block, hopper, furnace, blast furnace, smoker, brewing

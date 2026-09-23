@@ -32,7 +32,9 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -62,7 +64,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
     private final NonNullList<ItemStack> input = NonNullList.withSize(REGION, ItemStack.EMPTY);
     private final NonNullList<ItemStack> filtered = NonNullList.withSize(REGION, ItemStack.EMPTY);
     private final NonNullList<ItemStack> reject = NonNullList.withSize(REGION, ItemStack.EMPTY);
-    private final Map<Integer, ItemStack> filters = new HashMap<>();
+    /** Filter mode: the single item that is allowed through the gate. */
+    private ItemStack filter = ItemStack.EMPTY;
+    /** Client-side view of each container cell's contents, synced via the update tag. */
+    private final Map<Integer, List<ItemStack>> contentsView = new HashMap<>();
 
     public PcbBlockEntity(BlockPos pos, BlockState state) {
         super(RedstonePcbs.platform().pcbBlockEntityType(), pos, state);
@@ -90,18 +95,14 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
         inputsDirty = true;
     }
 
-    /** Sets (or clears, when empty) the item filter held by a hopper component cell. */
-    public void setFilter(int cellIndex, ItemStack filter) {
-        if (filter.isEmpty()) {
-            filters.remove(cellIndex);
-        } else {
-            filters.put(cellIndex, filter.copyWithCount(1));
-        }
+    /** Sets (or clears, when empty) the single item the gate lets through in filter mode. */
+    public void setFilter(ItemStack filter) {
+        this.filter = filter.isEmpty() ? ItemStack.EMPTY : filter.copyWithCount(1);
         setChanged();
     }
 
-    public ItemStack filter(int cellIndex) {
-        return filters.getOrDefault(cellIndex, ItemStack.EMPTY);
+    public ItemStack filter() {
+        return filter;
     }
 
     /** Called after an editor or blueprint edit; syncs to clients and schedules a world update. */
@@ -173,7 +174,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
             boardLevel = new BoardLevel(serverLevel, this);
             components.clear();
         }
-        boolean simple = chip.isSimpleHopperMode();
+        boolean simple = chip.isFilterHopperMode();
         for (int i = 0; i < chip.cellCount(); i++) {
             Part part = chip.cell(i).part;
             boolean wanted = part.isContainer() && !(part == Part.HOPPER && simple);
@@ -272,15 +273,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
     }
 
     private boolean matchesFilter(ItemStack stack) {
-        if (filters.isEmpty()) {
-            return true;
-        }
-        for (ItemStack filter : filters.values()) {
-            if (!filter.isEmpty() && ItemStack.isSameItem(filter, stack)) {
-                return true;
-            }
-        }
-        return false;
+        return !filter.isEmpty() && ItemStack.isSameItem(filter, stack);
     }
 
     private static boolean moveInto(NonNullList<ItemStack> target, ItemStack stack) {
@@ -502,14 +495,9 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.putByteArray("chip", ChipSerializer.write(chip));
-        ListTag filterTags = new ListTag();
-        for (Map.Entry<Integer, ItemStack> entry : filters.entrySet()) {
-            CompoundTag filterTag = new CompoundTag();
-            filterTag.putInt("i", entry.getKey());
-            filterTag.put("s", entry.getValue().save(registries));
-            filterTags.add(filterTag);
+        if (!filter.isEmpty()) {
+            tag.put("filter", filter.save(registries));
         }
-        tag.put("filters", filterTags);
 
         ListTag componentTags = new ListTag();
         for (Map.Entry<Integer, BoardComponent> entry : components.entrySet()) {
@@ -535,12 +523,17 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
         if (tag.contains("chip")) {
             chip = ChipSerializer.read(tag.getByteArray("chip"));
         }
-        filters.clear();
-        ListTag filterTags = tag.getList("filters", Tag.TAG_COMPOUND);
-        for (int i = 0; i < filterTags.size(); i++) {
-            CompoundTag filterTag = filterTags.getCompound(i);
-            ItemStack.parse(registries, filterTag.getCompound("s"))
-                    .ifPresent(stack -> filters.put(filterTag.getInt("i"), stack));
+        filter = ItemStack.EMPTY;
+        if (tag.contains("filter")) {
+            ItemStack.parse(registries, tag.getCompound("filter"))
+                    .ifPresent(stack -> filter = stack.copyWithCount(1));
+        } else if (tag.contains("filters")) {
+            // Legacy per-cell filter list: keep the first one.
+            ListTag filterTags = tag.getList("filters", Tag.TAG_COMPOUND);
+            if (!filterTags.isEmpty()) {
+                ItemStack.parse(registries, filterTags.getCompound(0).getCompound("s"))
+                        .ifPresent(stack -> filter = stack.copyWithCount(1));
+            }
         }
         components.clear();
         pendingComponents.clear();
@@ -550,12 +543,48 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
             CompoundTag componentTag = componentTags.getCompound(i);
             pendingComponents.put(componentTag.getInt("i"), componentTag.getCompound("be").copy());
         }
+        contentsView.clear();
+        ListTag containerTags = tag.getList("containers", Tag.TAG_COMPOUND);
+        for (int i = 0; i < containerTags.size(); i++) {
+            CompoundTag containerTag = containerTags.getCompound(i);
+            ListTag itemTags = containerTag.getList("items", Tag.TAG_COMPOUND);
+            List<ItemStack> stacks = new ArrayList<>(itemTags.size());
+            for (int j = 0; j < itemTags.size(); j++) {
+                ItemStack.parse(registries, itemTags.getCompound(j).getCompound("s")).ifPresent(stacks::add);
+            }
+            contentsView.put(containerTag.getInt("i"), stacks);
+        }
+    }
+
+    /** The synced contents of the container cell at {@code cell} (client-side view; may be empty). */
+    public List<ItemStack> contentsView(int cell) {
+        return contentsView.getOrDefault(cell, List.of());
     }
 
     @Override
     public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putByteArray("chip", ChipSerializer.write(chip));
+        ListTag containerTags = new ListTag();
+        for (Map.Entry<Integer, BoardComponent> entry : components.entrySet()) {
+            if (!(entry.getValue().blockEntity() instanceof Container container)) {
+                continue;
+            }
+            ListTag itemTags = new ListTag();
+            for (int slot = 0; slot < container.getContainerSize(); slot++) {
+                ItemStack stack = container.getItem(slot);
+                if (!stack.isEmpty()) {
+                    CompoundTag itemTag = new CompoundTag();
+                    itemTag.put("s", stack.save(registries));
+                    itemTags.add(itemTag);
+                }
+            }
+            CompoundTag containerTag = new CompoundTag();
+            containerTag.putInt("i", entry.getKey());
+            containerTag.put("items", itemTags);
+            containerTags.add(containerTag);
+        }
+        tag.put("containers", containerTags);
         return tag;
     }
 
