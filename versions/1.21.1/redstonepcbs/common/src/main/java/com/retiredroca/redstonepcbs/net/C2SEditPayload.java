@@ -27,6 +27,8 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static final int ACTION_SET_FILTER = 8;
     public static final int ACTION_CLEAR_FILTER = 9;
     public static final int ACTION_TOGGLE_HOPPER_MODE = 10;
+    public static final int ACTION_OPEN_UI = 11;
+    public static final int ACTION_PULSE_LAYER = 12;
 
     public static final int FLAG_SUBTRACT = 1;
 

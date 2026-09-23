@@ -79,6 +79,14 @@ public class NeoForgePlatform implements RedstonePcbsPlatform {
         blockEntities.register(modBus);
         dataComponents.register(modBus);
         modBus.addListener(this::registerCapabilities);
+        modBus.addListener(this::addCreativeTabEntries);
+    }
+
+    private void addCreativeTabEntries(
+            net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
+        if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS) {
+            event.accept(pcbItem.get());
+        }
     }
 
     private void registerCapabilities(net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent event) {

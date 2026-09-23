@@ -51,7 +51,7 @@ public class PcbEditorScreen extends Screen {
     private static final float[][] PRESETS = {
             {45, 35.264F}, {135, 35.264F}, {225, 35.264F}, {315, 35.264F},
             {0, 0}, {90, 0}, {180, 0}, {270, 0},
-            {0, 89}
+            {0, 90}
     };
     private static final String[] PRESET_LABELS = {"NE", "SE", "SW", "NW", "N", "E", "S", "W", "Top"};
     private static final float[][] AXES = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -74,6 +74,7 @@ public class PcbEditorScreen extends Screen {
 
     private int[] hoverBlock;
     private int[] placeBlock;
+    private int localTickCounter;
 
     private boolean pressed;
     private boolean dragging;
@@ -269,6 +270,8 @@ public class PcbEditorScreen extends Screen {
     private void drawBoundsAndGizmo(GuiGraphics graphics) {
         Matrix4f mvp = mvp();
         drawBoxWireframe(graphics, mvp, 0, 0, 0, GRID, GRID, GRID, 0x60FFFFFF);
+        // Highlight the active layer so the layer selection has a visible purpose.
+        drawBoxWireframe(graphics, mvp, 0, activeLayer, 0, GRID, activeLayer + 1, GRID, 0x9000E0FF);
 
         // Axis gizmo: constant GUI size, directions taken from the camera rotation, with labels.
         float ox = gridX + 22;
@@ -537,7 +540,7 @@ public class PcbEditorScreen extends Screen {
                     panY += dragY;
                 } else {
                     yaw = (float) ((yaw + dragX * 0.6) % 360.0);
-                    pitch = (float) Math.max(-89.0, Math.min(89.0, pitch + dragY * 0.6));
+                    pitch = (float) Math.max(-90.0, Math.min(90.0, pitch + dragY * 0.6));
                 }
             }
             return true;
@@ -562,12 +565,17 @@ public class PcbEditorScreen extends Screen {
         if (button == 1) {
             if (hoverBlock != null) {
                 int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
-                if (local.cell(index).part == Part.HOPPER && kind == C2SEditPayload.KIND_BLOCK) {
+                Part part = local.cell(index).part;
+                boolean hopperFilter = part == Part.HOPPER && local.isSimpleHopperMode();
+                if (hopperFilter && kind == C2SEditPayload.KIND_BLOCK) {
                     if (hasShiftDown()) {
                         send(C2SEditPayload.ACTION_CLEAR_FILTER, index, null, null, false);
                     } else {
                         send(C2SEditPayload.ACTION_SET_FILTER, index, selected, null, false);
                     }
+                } else if (part.isContainer() && kind == C2SEditPayload.KIND_BLOCK) {
+                    EditorReturn.stash(this);
+                    send(C2SEditPayload.ACTION_OPEN_UI, index, null, null, false);
                 } else {
                     send(C2SEditPayload.ACTION_INTERACT, index, null, null, false);
                     local.interact(index);
@@ -606,35 +614,34 @@ public class PcbEditorScreen extends Screen {
     }
 
     private Dir resolveFacing(Part part, int x, int y, int z) {
-        if (part.needsSupport()) {
-            int index = local.index(x, y, z);
-            // Prefer the face of the block the ray hit, if it is adjacent.
-            Dir hit = adjacentDir(x, y, z);
-            if (hit != null && local.hasSupport(index, hit)) {
-                return hit;
-            }
-            // Otherwise attach to any adjacent full block; refuse if there is none.
-            for (Dir d : Part.SUPPORTED_ORDER) {
-                if (local.hasSupport(index, d)) {
-                    return d;
+        int index = local.index(x, y, z);
+        Dir hit = adjacentDir(x, y, z);
+        return switch (part.facingFamily()) {
+            case TORCH -> {
+                // Attach to the clicked face if it can support a torch, else any supported side.
+                if (hit != null && local.hasSupport(index, hit)) {
+                    yield hit;
                 }
+                for (Dir d : Part.SUPPORTED_ORDER) {
+                    if (local.hasSupport(index, d)) {
+                        yield d;
+                    }
+                }
+                yield null;
             }
-            return null;
-        }
-        if (part.isHorizontalOnly()) {
-            // Face the opposite side of the clicked face, like vanilla placement.
-            Dir hit = adjacentDir(x, y, z);
-            if (hit != null && hit.isHorizontal()) {
-                return hit;
+            case HOPPER -> part.sanitizeFacing(hit != null ? hit : Dir.DOWN);
+            case HORIZONTAL -> {
+                // Face the opposite side of the clicked face, like vanilla placement.
+                if (hit != null && hit.isHorizontal()) {
+                    yield hit;
+                }
+                yield part.sanitizeFacing(pendingFacing);
             }
-            return part.sanitizeFacing(pendingFacing);
-        }
-        if (part.pointsAtNeighbour()) {
-            // Like vanilla: point at the block the ray hit; down or a side (never up).
-            Dir hit = adjacentDir(x, y, z);
-            return part.sanitizeFacing(hit != null ? hit : Dir.DOWN);
-        }
-        return Dir.UP;
+            case SIX_WAY -> part.sanitizeFacing(hit != null ? hit : Dir.UP);
+            // A lever/button with nothing adjacent (e.g. on the board floor) sits on the floor.
+            case FACE_ATTACHED -> part.sanitizeFacing(hit != null ? hit : Dir.DOWN);
+            case NONE -> Dir.UP;
+        };
     }
 
     /** Direction from the cell at (x,y,z) to the currently hovered block, or null if not adjacent. */
@@ -757,7 +764,7 @@ public class PcbEditorScreen extends Screen {
 
     private void selectPart(Part part) {
         selected = part;
-        pendingFacing = part == Part.TORCH ? Dir.DOWN : Dir.NORTH;
+        pendingFacing = part.needsSupport() || part.pointsAtNeighbour() ? Dir.DOWN : Dir.NORTH;
     }
 
     // --- panel ------------------------------------------------------------------------------------
@@ -786,8 +793,8 @@ public class PcbEditorScreen extends Screen {
         graphics.drawString(this.font, "View", px, y, 0xFFFFFF, false);
         y += 10;
         for (int i = 0; i < PRESETS.length; i++) {
-            int col = i % 5;
-            int row = i / 5;
+            int col = i % 4;
+            int row = i / 4;
             int bx = px + col * 26;
             int by = y + row * (BTN_H + 1);
             final int idx = i;
@@ -796,7 +803,7 @@ public class PcbEditorScreen extends Screen {
                 pitch = PRESETS[idx][1];
             });
         }
-        y += (BTN_H + 1) * 2 + 4;
+        y += (BTN_H + 1) * 3 + 4;
 
         addButton(graphics, px, y, 20, BTN_H, "-",
                 () -> zoomBy(-0.05F, gridX + gridSize / 2.0F, gridY + gridSize / 2.0F));
@@ -812,14 +819,22 @@ public class PcbEditorScreen extends Screen {
         addButton(graphics, px, y, 20, BTN_H, "-", () -> activeLayer = Math.max(0, activeLayer - 1));
         addButton(graphics, px + 22, y, 20, BTN_H, "+", () -> activeLayer = Math.min(GRID - 1, activeLayer + 1));
         graphics.drawString(this.font, "Layer " + (activeLayer + 1) + "/16", px + 46, y + 3, 0xFFFFFF, false);
+        y += BTN_H + 2;
+        addButton(graphics, px, y, 100, BTN_H, "Pulse Layer", () -> {
+            send(C2SEditPayload.ACTION_PULSE_LAYER, activeLayer, null, null, false);
+            local.pulseLayer(activeLayer);
+            local.settleNow();
+        });
         y += BTN_H + 4;
 
-        addButton(graphics, px, y, 60, BTN_H, "Library", () -> {
+        int libW = 56;
+        String hopperLabel = local.isSimpleHopperMode() ? "Hopper: Easy" : "Hopper: Normal";
+        int hopW = Math.max(56, this.font.width(hopperLabel) + 6);
+        addButton(graphics, px, y, libW, BTN_H, "Library", () -> {
             libraryOpen = true;
             sendLibrary(C2SLibraryPayload.ACTION_LIST, 0);
         });
-        addButton(graphics, px + 62, y, 68, BTN_H,
-                local.isSimpleHopperMode() ? "Hopper:Simple" : "Hopper:Normal",
+        addButton(graphics, px + libW + 2, y, hopW, BTN_H, hopperLabel,
                 () -> send(C2SEditPayload.ACTION_TOGGLE_HOPPER_MODE, 0, null, null, false));
         y += BTN_H + 4;
 
@@ -839,8 +854,20 @@ public class PcbEditorScreen extends Screen {
     private void addButton(GuiGraphics graphics, int x, int y, int w, int h, String label, Runnable action) {
         boolean hovered = lastMouseX >= x && lastMouseX < x + w && lastMouseY >= y && lastMouseY < y + h;
         graphics.fill(x, y, x + w, y + h, hovered ? 0xFF505050 : 0xFF303030);
-        graphics.drawString(this.font, label, x + 3, y + 3, 0xE0E0E0, false);
+        graphics.drawString(this.font, fit(label, w - 6), x + 3, y + 3, 0xE0E0E0, false);
         buttons.add(new Button(x, y, w, h, action));
+    }
+
+    /** Truncates a label with an ellipsis so it can never spill outside its button. */
+    private String fit(String label, int maxWidth) {
+        if (this.font.width(label) <= maxWidth) {
+            return label;
+        }
+        String s = label;
+        while (s.length() > 1 && this.font.width(s + "...") > maxWidth) {
+            s = s.substring(0, s.length() - 1);
+        }
+        return s + "...";
     }
 
     private void renderLibrary(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -937,7 +964,7 @@ public class PcbEditorScreen extends Screen {
         countInto(inv.offhand);
         for (Part part : PcbIcons.PALETTE) {
             paletteAvailable[part.ordinal()] = com.retiredroca.redstonepcbs.craft.Crafting.available(
-                    this.minecraft.level, this.minecraft.player, PcbIcons.itemFor(part));
+                    this.minecraft.player, PcbIcons.itemFor(part));
         }
     }
 
@@ -960,6 +987,19 @@ public class PcbEditorScreen extends Screen {
         super.init();
         recalcLayout();
         send(C2SEditPayload.ACTION_REQUEST, 0, null, null, false);
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        // Advance the local engine every two game ticks (one redstone tick) so delayed parts -
+        // buttons releasing, torches/repeaters/observers firing - animate while editing.
+        if (++localTickCounter >= 2) {
+            localTickCounter = 0;
+            if (local.isActive()) {
+                local.tick();
+            }
+        }
     }
 
     @Override

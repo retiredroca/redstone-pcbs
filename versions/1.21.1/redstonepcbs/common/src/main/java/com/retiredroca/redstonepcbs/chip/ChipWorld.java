@@ -18,7 +18,7 @@ import java.util.TreeSet;
  */
 public final class ChipWorld {
     public static final int SIZE = 16;
-    public static final int FORMAT_VERSION = 3;
+    public static final int FORMAT_VERSION = 4;
 
     private static final int INDEX_BITS = 12;
     private static final int INDEX_MASK = (1 << INDEX_BITS) - 1;
@@ -165,20 +165,24 @@ public final class ChipWorld {
         markDirty();
     }
 
-    /** Rotates a directional part according to its behaviour group. */
+    /** Rotates a directional part to the next direction in its facing family's order. */
     public void rotate(int index) {
         Cell c = cells[index];
-        if (c.part.needsSupport()) {
-            // Cycle to the next direction that actually has a block to attach to (down + 4 sides).
-            int start = 0;
-            for (int i = 0; i < Part.SUPPORTED_ORDER.length; i++) {
-                if (Part.SUPPORTED_ORDER[i] == c.facing) {
-                    start = i;
-                    break;
-                }
+        Dir[] order = c.part.facingOrder();
+        if (order.length == 0) {
+            return;
+        }
+        int start = 0;
+        for (int i = 0; i < order.length; i++) {
+            if (order[i] == c.facing) {
+                start = i;
+                break;
             }
-            for (int k = 1; k <= Part.SUPPORTED_ORDER.length; k++) {
-                Dir candidate = Part.SUPPORTED_ORDER[(start + k) % Part.SUPPORTED_ORDER.length];
+        }
+        if (c.part.needsSupport()) {
+            // A torch only rotates to a direction that actually has a support.
+            for (int k = 1; k <= order.length; k++) {
+                Dir candidate = order[(start + k) % order.length];
                 if (hasSupport(index, candidate)) {
                     c.facing = candidate;
                     markDirty();
@@ -187,29 +191,8 @@ public final class ChipWorld {
             }
             return;
         }
-        if (c.part.isHorizontalOnly()) {
-            c.facing = switch (c.facing) {
-                case NORTH -> Dir.EAST;
-                case EAST -> Dir.SOUTH;
-                case SOUTH -> Dir.WEST;
-                case WEST -> Dir.NORTH;
-                default -> Dir.NORTH;
-            };
-            markDirty();
-            return;
-        }
-        if (c.part.pointsAtNeighbour()) {
-            // Hoppers face down or one of the four sides (never up).
-            c.facing = switch (c.facing) {
-                case DOWN -> Dir.NORTH;
-                case NORTH -> Dir.SOUTH;
-                case SOUTH -> Dir.WEST;
-                case WEST -> Dir.EAST;
-                case EAST -> Dir.DOWN;
-                default -> Dir.DOWN;
-            };
-            markDirty();
-        }
+        c.facing = order[(start + 1) % order.length];
+        markDirty();
     }
 
     /** True when the neighbour of {@code index} in {@code dir} can support a torch. The board's
@@ -264,6 +247,27 @@ public final class ChipWorld {
             pressButton(index);
         } else if (c.part == Part.DUST) {
             cycleDustShape(index);
+        }
+    }
+
+    /**
+     * Test trigger: toggles every lever and presses every button on layer {@code y}, so a circuit
+     * can be started from a chosen slice without touching each part individually.
+     */
+    public void pulseLayer(int y) {
+        if (y < 0 || y >= sizeY) {
+            return;
+        }
+        for (int x = 0; x < sizeX; x++) {
+            for (int z = 0; z < sizeZ; z++) {
+                int i = index(x, y, z);
+                Cell c = cells[i];
+                if (c.part == Part.LEVER) {
+                    setLever(i, !c.on);
+                } else if (c.part == Part.BUTTON) {
+                    pressButton(i);
+                }
+            }
         }
     }
 
@@ -327,6 +331,18 @@ public final class ChipWorld {
         int clamped = Math.max(0, Math.min(15, power));
         if (faceAnalog[face.ordinal()] != clamped) {
             faceAnalog[face.ordinal()] = clamped;
+            markDirty();
+        }
+    }
+
+    /**
+     * Sets the analog comparator output reported by a container/processor cell. Refreshed by the
+     * block entity from the part's vanilla inventory/progress; only read by adjacent comparators.
+     */
+    public void setCellAnalog(int index, int power) {
+        int clamped = Math.max(0, Math.min(15, power));
+        if (cells[index].analog != clamped) {
+            cells[index].analog = clamped;
             markDirty();
         }
     }
@@ -562,7 +578,7 @@ public final class ChipWorld {
         boolean changed = false;
         for (int i = 0; i < cellCount; i++) {
             Cell c = cells[i];
-            if (c.part != Part.LAMP && c.part != Part.NOTE_BLOCK) {
+            if (!c.part.isSink()) {
                 continue;
             }
             boolean lit = anyInput(i);
@@ -612,7 +628,7 @@ public final class ChipWorld {
         if (n < 0) {
             return Math.max(faceInput[fromDir.ordinal()], faceAnalog[fromDir.ordinal()]);
         }
-        return inputPower(index, fromDir);
+        return Math.max(inputPower(index, fromDir), cells[n].analog);
     }
 
     private boolean anyInput(int index) {
@@ -692,7 +708,8 @@ public final class ChipWorld {
     private int emitPower(int index, Dir out) {
         Cell c = cells[index];
         return switch (c.part) {
-            case AIR, SOLID, LAMP, GLASS, HOPPER, NOTE_BLOCK -> 0;
+            case AIR, SOLID, LAMP, GLASS, HOPPER, NOTE_BLOCK, FURNACE, BLAST_FURNACE, SMOKER,
+                    BREWING_STAND, CRAFTER -> 0;
             case DUST -> c.power;
             case REDSTONE_BLOCK -> 15;
             case LEVER, BUTTON -> c.on ? 15 : 0;

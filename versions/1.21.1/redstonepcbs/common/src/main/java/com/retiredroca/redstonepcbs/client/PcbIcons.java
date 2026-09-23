@@ -11,7 +11,8 @@ import net.minecraft.world.item.Items;
 public final class PcbIcons {
     public static final Part[] PALETTE = {
             Part.SOLID, Part.DUST, Part.TORCH, Part.REPEATER, Part.COMPARATOR, Part.REDSTONE_BLOCK,
-            Part.LAMP, Part.OBSERVER, Part.NOTE_BLOCK, Part.GLASS, Part.HOPPER
+            Part.LEVER, Part.BUTTON, Part.LAMP, Part.OBSERVER, Part.NOTE_BLOCK, Part.GLASS, Part.HOPPER,
+            Part.FURNACE, Part.BLAST_FURNACE, Part.SMOKER, Part.BREWING_STAND, Part.CRAFTER
     };
 
     private PcbIcons() {}
@@ -31,6 +32,11 @@ public final class PcbIcons {
             case NOTE_BLOCK -> Items.NOTE_BLOCK;
             case GLASS -> Items.GLASS;
             case HOPPER -> Items.HOPPER;
+            case FURNACE -> Items.FURNACE;
+            case BLAST_FURNACE -> Items.BLAST_FURNACE;
+            case SMOKER -> Items.SMOKER;
+            case BREWING_STAND -> Items.BREWING_STAND;
+            case CRAFTER -> Items.CRAFTER;
             default -> Items.AIR;
         };
     }

@@ -120,6 +120,7 @@ public class PcbBlock extends Block implements EntityBlock {
     public void playerDestroy(Level level, Player player, BlockPos pos, BlockState state,
             @Nullable BlockEntity blockEntity, ItemStack tool) {
         if (!level.isClientSide && blockEntity instanceof PcbBlockEntity be) {
+            be.dropComponentContents();
             ItemStack drop = new ItemStack(RedstonePcbs.platform().pcbItem());
             drop.set(RedstonePcbs.platform().chip(), new ChipData(ChipSerializer.write(be.chip())));
             Block.popResource(level, pos, drop);

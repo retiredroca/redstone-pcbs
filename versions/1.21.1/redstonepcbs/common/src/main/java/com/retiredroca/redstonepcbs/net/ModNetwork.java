@@ -12,6 +12,7 @@ import com.retiredroca.redstonepcbs.item.PcbItem;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.MenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -67,6 +68,13 @@ public final class ModNetwork {
             be.onEdited();
             RedstonePcbs.platform().sendToPlayer(player,
                     S2CSnapshotPayload.block(payload.pos(), ChipSerializer.write(chip)));
+            return;
+        }
+        if (payload.action() == C2SEditPayload.ACTION_OPEN_UI) {
+            MenuProvider provider = be.componentMenu(payload.index());
+            if (provider != null) {
+                player.openMenu(provider);
+            }
             return;
         }
         boolean changed = apply(player, chip, payload);
@@ -263,6 +271,10 @@ public final class ModNetwork {
                 chip.toggleHopperMode();
                 yield true;
             }
+            case C2SEditPayload.ACTION_PULSE_LAYER -> {
+                chip.pulseLayer(payload.index());
+                yield true;
+            }
             case C2SEditPayload.ACTION_CLEAR_ALL -> {
                 refundAll(player, chip);
                 chip.clearAll();
@@ -292,7 +304,7 @@ public final class ModNetwork {
         }
         if (!player.isCreative()) {
             Item item = itemFor(part);
-            if (item == null || !com.retiredroca.redstonepcbs.craft.Crafting.consume(player.level(), player, item)) {
+            if (item == null || !com.retiredroca.redstonepcbs.craft.Crafting.consume(player, item)) {
                 return false;
             }
         }
@@ -406,6 +418,11 @@ public final class ModNetwork {
             case NOTE_BLOCK -> Items.NOTE_BLOCK;
             case GLASS -> Items.GLASS;
             case HOPPER -> Items.HOPPER;
+            case FURNACE -> Items.FURNACE;
+            case BLAST_FURNACE -> Items.BLAST_FURNACE;
+            case SMOKER -> Items.SMOKER;
+            case BREWING_STAND -> Items.BREWING_STAND;
+            case CRAFTER -> Items.CRAFTER;
             default -> null;
         };
     }

@@ -277,4 +277,103 @@ class ChipWorldTest {
         assertTrue(w.hasSupport(w.index(2, 0, 2), Dir.DOWN), "the bottom layer is a floor");
         assertFalse(w.hasSupport(w.index(2, 1, 2), Dir.DOWN), "above the floor there is no support");
     }
+
+    @Test
+    void comparatorReadsContainerAnalog() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.FURNACE, Dir.EAST);
+        place(w, 1, 0, 0, Part.COMPARATOR, Dir.EAST);
+        w.setCellAnalog(w.index(0, 0, 0), 9);
+
+        w.settleNow();
+        w.tick();
+
+        assertEquals(9, w.cell(1, 0, 0).power, "comparator reads the container behind it");
+        assertTrue(w.cell(1, 0, 0).powered);
+    }
+
+    @Test
+    void containerAnalogDoesNotPowerDust() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 0, 0, Part.FURNACE, Dir.EAST);
+        place(w, 1, 0, 0, Part.DUST, Dir.UP);
+        w.setCellAnalog(w.index(0, 0, 0), 15);
+
+        w.settleNow();
+
+        assertEquals(0, w.cell(1, 0, 0).power, "an analog container signal never feeds dust");
+    }
+
+    @Test
+    void serializationRoundTripsContainerPartAndAnalog() {
+        ChipWorld w = new ChipWorld();
+        // CRAFTER has an ordinal above 15, proving the widened part field.
+        w.set(2, 3, 4, Part.CRAFTER, Dir.WEST);
+        w.setCellAnalog(w.index(2, 3, 4), 11);
+
+        ChipWorld r = ChipSerializer.read(ChipSerializer.write(w));
+
+        assertEquals(Part.CRAFTER, r.cell(2, 3, 4).part);
+        assertEquals(Dir.WEST, r.cell(2, 3, 4).facing);
+        assertEquals(11, r.cell(2, 3, 4).analog);
+    }
+
+    @Test
+    void observerRotatesThroughAllSixDirections() {
+        ChipWorld w = new ChipWorld();
+        place(w, 4, 4, 4, Part.OBSERVER, Dir.NORTH);
+        int idx = w.index(4, 4, 4);
+
+        boolean sawUp = false;
+        boolean sawDown = false;
+        for (int i = 0; i < 6; i++) {
+            w.rotate(idx);
+            sawUp |= w.cell(4, 4, 4).facing == Dir.UP;
+            sawDown |= w.cell(4, 4, 4).facing == Dir.DOWN;
+        }
+        assertTrue(sawUp && sawDown, "observers face all six directions");
+    }
+
+    @Test
+    void pulseLayerTogglesLeversAndPressesButtonsOnThatLayerOnly() {
+        ChipWorld w = new ChipWorld();
+        place(w, 0, 2, 0, Part.LEVER, Dir.UP);
+        place(w, 1, 2, 0, Part.BUTTON, Dir.UP);
+        place(w, 0, 3, 0, Part.LEVER, Dir.UP);
+
+        w.pulseLayer(2);
+        assertTrue(w.cell(0, 2, 0).on, "lever on the pulsed layer turns on");
+        assertTrue(w.cell(1, 2, 0).on, "button on the pulsed layer is pressed");
+        assertFalse(w.cell(0, 3, 0).on, "levers on other layers are untouched");
+
+        w.pulseLayer(2);
+        assertFalse(w.cell(0, 2, 0).on, "a second pulse toggles the lever back");
+    }
+
+    @Test
+    void facingFamiliesGroupCorrectly() {
+        assertTrue(Part.LEVER.isFaceAttached());
+        assertTrue(Part.BUTTON.isFaceAttached());
+        assertFalse(Part.LEVER.isHorizontalOnly());
+        assertEquals(Dir.UP, Part.LEVER.sanitizeFacing(Dir.UP));
+        assertEquals(Dir.DOWN, Part.BUTTON.sanitizeFacing(Dir.DOWN));
+
+        assertTrue(Part.OBSERVER.isSixWay());
+        assertTrue(Part.CRAFTER.isSixWay());
+        assertTrue(Part.REPEATER.isHorizontalOnly());
+        assertTrue(Part.FURNACE.isHorizontalOnly());
+
+        assertTrue(Part.SOLID.isConductive());
+        assertTrue(Part.HOPPER.isConductive());
+        assertFalse(Part.GLASS.isConductive());
+        assertTrue(Part.GLASS.isFullBlock());
+
+        assertEquals(Part.ContainerFamily.COOKER, Part.FURNACE.containerFamily());
+        assertEquals(Part.ContainerFamily.COOKER, Part.BLAST_FURNACE.containerFamily());
+        assertEquals(Part.ContainerFamily.COOKER, Part.SMOKER.containerFamily());
+        assertEquals(Part.ContainerFamily.HOPPER, Part.HOPPER.containerFamily());
+        assertEquals(Part.ContainerFamily.NONE, Part.COMPARATOR.containerFamily());
+        assertTrue(Part.CRAFTER.isContainer());
+        assertFalse(Part.NOTE_BLOCK.isContainer());
+    }
 }

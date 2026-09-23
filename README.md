@@ -9,11 +9,15 @@ save-persistent redstone board inside a single block.
 
 - **PCB block** - right-click to open the board editor. The board is a 16x16x16 voxel grid shown in an
   orthographic 3D view: drag to orbit, `Ctrl`+drag to pan, `Ctrl`+scroll to zoom toward the cursor, and
-  the scroll wheel (or the layer buttons) to step the active layer. Left-click places the selected
-  part, `Shift`+left-click erases, right-click interacts (toggles levers/buttons), `R` rotates the
-  hovered part, `D` cycles a repeater's delay, `M` toggles comparator mode, and a Reset button recentres
-  the view. Parts show their vanilla item icon, and the side palette is an inventory-style list with
-  names, counts and tooltips.
+  the scroll wheel (or the layer buttons) to step the active layer. The view presets are laid out in
+  three rows (NE/SE/SW/NW, N/E/S/W, Top). Left-click places the selected part, `Shift`+left-click
+  erases, right-click interacts (toggles levers/buttons, or opens a container's UI), `R` rotates the
+  hovered part, `D` cycles a repeater's delay, `M` toggles comparator mode, and a Reset button
+  recentres the view. The active layer is outlined, and **Pulse Layer** toggles every lever and presses
+  every button on that layer so a circuit can be started from a chosen slice. The editor runs the
+  circuit locally, so delayed parts (buttons releasing, torches/repeaters/observers firing) animate
+  while you edit. Parts show their vanilla item icon, and the side palette is an inventory-style list
+  with names, counts and tooltips.
 - **Real redstone parts** - dust, torches, repeaters, comparators, blocks of redstone, levers,
   buttons, solid blocks and lamps, with vanilla-like signal strength, weak/strong power and delays.
   The simulation is deterministic (no quasi-connectivity / update-order quirks) and runs on the
@@ -26,11 +30,17 @@ save-persistent redstone board inside a single block.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
   world). "Save Design" costs one paper in survival, and loading a design back onto a board consumes
   the matching items in survival.
+- **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or (in normal
+  hopper mode) a hopper inside the board. Right-click one in the editor to open its normal vanilla UI,
+  and it processes exactly like the world block (smelting, brewing, crafting, item transfer); adjacent
+  comparators read its signal strength. Breaking the board or removing a container spills its contents
+  instead of deleting them.
 
 Components are the vanilla items (redstone, torch, repeater, comparator, block of redstone, lever,
-button, stone, glass, lamp, observer, note block, hopper). Placing a part in the editor consumes the
-matching item in survival and removing it refunds; in survival the palette only offers parts you are
-holding or can craft from your inventory.
+button, stone, glass, lamp, observer, note block, hopper, furnace, blast furnace, smoker, brewing
+stand, crafter). Placing a part in the editor consumes the matching item in survival and removing it
+refunds; in survival the palette offers every part whose item is in your inventory, and in creative
+every part is available. The PCB itself appears in the vanilla Redstone Blocks creative tab.
 
 ## Build
 

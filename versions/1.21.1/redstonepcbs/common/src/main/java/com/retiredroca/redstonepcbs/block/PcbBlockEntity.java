@@ -1,6 +1,9 @@
 package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.block.component.BoardComponent;
+import com.retiredroca.redstonepcbs.block.level.BoardLevel;
+import com.retiredroca.redstonepcbs.chip.Cell;
 import com.retiredroca.redstonepcbs.chip.ChipSerializer;
 import com.retiredroca.redstonepcbs.chip.ChipWorld;
 import com.retiredroca.redstonepcbs.chip.Dir;
@@ -18,8 +21,10 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.MenuProvider;
 import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -47,6 +52,12 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
     private final int[] lastOutput = new int[Dir.VALUES.length];
     private int gameTickCounter;
     private boolean inputsDirty = true;
+
+    /** Container/processor parts, keyed by cell index, running vanilla block-entity logic. */
+    private final Map<Integer, BoardComponent> components = new HashMap<>();
+    /** Component NBT loaded before the level was available; applied when the component is created. */
+    private final Map<Integer, CompoundTag> pendingComponents = new HashMap<>();
+    private BoardLevel boardLevel;
 
     private final NonNullList<ItemStack> input = NonNullList.withSize(REGION, ItemStack.EMPTY);
     private final NonNullList<ItemStack> filtered = NonNullList.withSize(REGION, ItemStack.EMPTY);
@@ -113,6 +124,8 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
         if (level == null || level.isClientSide) {
             return;
         }
+        ensureComponents();
+        tickComponents();
         routeItems();
         gameTickCounter++;
         if (gameTickCounter < GAME_TICKS_PER_REDSTONE_TICK && !inputsDirty) {
@@ -125,6 +138,104 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
             setChanged();
         }
         pushOutputs();
+    }
+
+    // --- container/processor components -----------------------------------------------------------
+
+    /** The component at {@code cell}, or null if the cell holds no container/processor part. */
+    public BoardComponent component(int cell) {
+        return components.get(cell);
+    }
+
+    /** The vanilla block entity of the component at {@code cell}, for the virtual board level. */
+    public BlockEntity componentEntity(int cell) {
+        BoardComponent component = components.get(cell);
+        return component == null ? null : component.blockEntity();
+    }
+
+    /** The menu provider of the component at {@code cell}, or null. */
+    public MenuProvider componentMenu(int cell) {
+        BoardComponent component = components.get(cell);
+        return component == null ? null : component.menuProvider();
+    }
+
+    /** Called when a component mutates (or a captured block update arrives). */
+    public void onComponentChanged() {
+        setChanged();
+    }
+
+    /** Creates/removes components so the map matches the chip and the current hopper mode. */
+    private void ensureComponents() {
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return;
+        }
+        if (boardLevel == null || boardLevel.real() != serverLevel) {
+            boardLevel = new BoardLevel(serverLevel, this);
+            components.clear();
+        }
+        boolean simple = chip.isSimpleHopperMode();
+        for (int i = 0; i < chip.cellCount(); i++) {
+            Part part = chip.cell(i).part;
+            boolean wanted = part.isContainer() && !(part == Part.HOPPER && simple);
+            BoardComponent existing = components.get(i);
+            if (!wanted) {
+                if (existing != null) {
+                    if (existing.part() == Part.HOPPER && part == Part.HOPPER) {
+                        // Only the hopper mode changed: keep the inventory for when it returns.
+                        pendingComponents.put(i,
+                                existing.blockEntity().saveWithoutMetadata(serverLevel.registryAccess()));
+                    } else {
+                        dropContents(existing);
+                    }
+                    components.remove(i);
+                }
+                continue;
+            }
+            if (existing != null && existing.part() == part) {
+                continue;
+            }
+            BlockPos pos = boardLevel.vposOf(i);
+            BoardComponent created = BoardComponent.create(part, pos, com.retiredroca.redstonepcbs.block.BoardStates.of(chip.cell(i)));
+            if (created == null) {
+                continue;
+            }
+            created.blockEntity().setLevel(boardLevel);
+            CompoundTag saved = pendingComponents.remove(i);
+            if (saved != null) {
+                created.blockEntity().loadWithComponents(saved, serverLevel.registryAccess());
+            }
+            components.put(i, created);
+        }
+    }
+
+    private void tickComponents() {
+        for (Map.Entry<Integer, BoardComponent> entry : components.entrySet()) {
+            Cell cell = chip.cell(entry.getKey());
+            entry.getValue().tick(boardLevel, entry.getKey(), cell);
+        }
+    }
+
+    /** Spills every component's inventory into the world (called when the board is broken). */
+    public void dropComponentContents() {
+        for (BoardComponent component : components.values()) {
+            dropContents(component);
+        }
+        components.clear();
+    }
+
+    /** Spills a removed component's inventory into the world so items are never silently lost. */
+    private void dropContents(BoardComponent component) {
+        if (!(level instanceof ServerLevel serverLevel)
+                || !(component.blockEntity() instanceof Container container)) {
+            return;
+        }
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack stack = container.getItem(slot);
+            if (!stack.isEmpty()) {
+                Block.popResource(serverLevel, worldPosition, stack.copy());
+                container.setItem(slot, ItemStack.EMPTY);
+            }
+        }
     }
 
     // --- item gate --------------------------------------------------------------------------------
@@ -399,6 +510,23 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
             filterTags.add(filterTag);
         }
         tag.put("filters", filterTags);
+
+        ListTag componentTags = new ListTag();
+        for (Map.Entry<Integer, BoardComponent> entry : components.entrySet()) {
+            CompoundTag componentTag = new CompoundTag();
+            componentTag.putInt("i", entry.getKey());
+            componentTag.putInt("p", entry.getValue().part().ordinal());
+            componentTag.put("be", entry.getValue().blockEntity().saveWithoutMetadata(registries));
+            componentTags.add(componentTag);
+        }
+        for (Map.Entry<Integer, CompoundTag> entry : pendingComponents.entrySet()) {
+            CompoundTag componentTag = new CompoundTag();
+            componentTag.putInt("i", entry.getKey());
+            componentTag.putInt("p", chip.cell(entry.getKey()).part.ordinal());
+            componentTag.put("be", entry.getValue().copy());
+            componentTags.add(componentTag);
+        }
+        tag.put("components", componentTags);
     }
 
     @Override
@@ -413,6 +541,14 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer {
             CompoundTag filterTag = filterTags.getCompound(i);
             ItemStack.parse(registries, filterTag.getCompound("s"))
                     .ifPresent(stack -> filters.put(filterTag.getInt("i"), stack));
+        }
+        components.clear();
+        pendingComponents.clear();
+        boardLevel = null;
+        ListTag componentTags = tag.getList("components", Tag.TAG_COMPOUND);
+        for (int i = 0; i < componentTags.size(); i++) {
+            CompoundTag componentTag = componentTags.getCompound(i);
+            pendingComponents.put(componentTag.getInt("i"), componentTag.getCompound("be").copy());
         }
     }
 

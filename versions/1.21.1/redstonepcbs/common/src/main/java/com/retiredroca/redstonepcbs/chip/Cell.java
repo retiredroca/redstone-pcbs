@@ -26,6 +26,11 @@ public final class Cell {
     public boolean subtract;
     public boolean on;
     public boolean locked;
+    /**
+     * Analog comparator output (0-15) of a container/processor part, refreshed from its vanilla
+     * block entity each tick. Only read by adjacent comparators; not derived by the simulation.
+     */
+    public int analog;
     /** Redstone dust horizontal connections: bit0 N, bit1 E, bit2 S, bit3 W. Default is a cross. */
     public int dustMask = 0x0F;
 
@@ -44,6 +49,7 @@ public final class Cell {
         subtract = false;
         on = false;
         locked = false;
+        analog = 0;
         pendingAt = -1L;
         watchSig = Integer.MIN_VALUE;
         dustMask = 0x0F;
@@ -59,6 +65,7 @@ public final class Cell {
         subtract = other.subtract;
         on = other.on;
         locked = other.locked;
+        analog = other.analog;
         dustMask = other.dustMask;
     }
 

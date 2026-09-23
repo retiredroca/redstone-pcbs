@@ -55,6 +55,10 @@ public class FabricPlatform implements RedstonePcbsPlatform {
                 .networkSynchronized(ChipData.STREAM_CODEC)
                 .build();
         Registry.register(BuiltInRegistries.DATA_COMPONENT_TYPE, ModContent.CHIP_ID, chipComponent);
+
+        net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents
+                .modifyEntriesEvent(net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS)
+                .register(entries -> entries.accept(pcbItem));
     }
 
     @Override

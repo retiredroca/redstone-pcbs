@@ -4,12 +4,16 @@ package com.retiredroca.redstonepcbs.chip;
  * Compact, versioned binary serialization for a {@link ChipWorld}.
  *
  * <pre>
- *   v2 header: version, sizeX, sizeY, sizeZ, flags(bit0 = simple hopper mode)
- *   per cell (3 bytes):
- *     byte 0: part ordinal (low nibble) | facing ordinal (high nibble)
+ *   v4 header: version, sizeX, sizeY, sizeZ, flags(bit0 = simple hopper mode)
+ *   per cell (4 bytes):
+ *     byte 0: part ordinal (low 5 bits) | facing ordinal (high 3 bits)
  *     byte 1: signal power/strength (low nibble) | delay (high nibble)
- *     byte 2: flags - bit0 powered, bit1 subtract, bit2 on, bit3 locked
+ *     byte 2: flags - bit0 powered, bit1 subtract, bit2 on, bit3 locked | dustMask (high nibble)
+ *     byte 3: container analog output (low nibble)
  * </pre>
+ *
+ * <p>v1-v3 used 3 bytes per cell with the part in the low nibble (at most 16 parts). v4 widens the
+ * part field to 5 bits and adds the per-cell container analog value.
  *
  * <p>Derived state (a solid block's weak power, pending delays, observer watch state) is not stored;
  * it is recomputed on the first tick after loading.
@@ -21,7 +25,7 @@ public final class ChipSerializer {
         int sizeX = world.sizeX();
         int sizeY = world.sizeY();
         int sizeZ = world.sizeZ();
-        byte[] data = new byte[5 + world.cellCount() * 3];
+        byte[] data = new byte[5 + world.cellCount() * 4];
         data[0] = (byte) ChipWorld.FORMAT_VERSION;
         data[1] = (byte) sizeX;
         data[2] = (byte) sizeY;
@@ -30,7 +34,7 @@ public final class ChipSerializer {
         int p = 5;
         for (int i = 0; i < world.cellCount(); i++) {
             Cell c = world.cell(i);
-            data[p++] = (byte) (c.part.ordinal() | (c.facing.ordinal() << 4));
+            data[p++] = (byte) ((c.part.ordinal() & 0x1F) | ((c.facing.ordinal() & 0x07) << 5));
             data[p++] = (byte) ((c.power & 0x0F) | ((c.delay & 0x0F) << 4));
             int flags = (c.powered ? 1 : 0)
                     | (c.subtract ? 2 : 0)
@@ -38,6 +42,7 @@ public final class ChipSerializer {
                     | (c.locked ? 8 : 0)
                     | ((c.dustMask & 0x0F) << 4);
             data[p++] = (byte) flags;
+            data[p++] = (byte) (c.analog & 0x0F);
         }
         return data;
     }
@@ -64,7 +69,8 @@ public final class ChipSerializer {
         } else {
             p = 4;
         }
-        if (data.length < p + world.cellCount() * 3) {
+        int cellBytes = version >= 4 ? 4 : 3;
+        if (data.length < p + world.cellCount() * cellBytes) {
             return world;
         }
         for (int i = 0; i < world.cellCount(); i++) {
@@ -72,8 +78,14 @@ public final class ChipSerializer {
             int b1 = data[p++] & 0xFF;
             int b2 = data[p++] & 0xFF;
             Cell c = world.cell(i);
-            c.part = Part.byOrdinal(b0 & 0x0F);
-            c.facing = Dir.byOrdinal((b0 >> 4) & 0x07);
+            if (version >= 4) {
+                c.part = Part.byOrdinal(b0 & 0x1F);
+                c.facing = Dir.byOrdinal((b0 >> 5) & 0x07);
+                c.analog = data[p++] & 0x0F;
+            } else {
+                c.part = Part.byOrdinal(b0 & 0x0F);
+                c.facing = Dir.byOrdinal((b0 >> 4) & 0x07);
+            }
             c.power = b1 & 0x0F;
             c.delay = (b1 >> 4) & 0x0F;
             c.powered = (b2 & 1) != 0;
