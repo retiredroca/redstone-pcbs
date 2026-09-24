@@ -76,7 +76,7 @@ public final class BoardSpace {
      * Places a cell at placement time. {@code UPDATE_NEIGHBORS} fires the standard neighbour and
      * shape update pass for this one cell (exactly the "update neighbour instead of update all"
      * change from the old era), so freshly placed wires connect and their redstone reacts here
-     * and now. {@code UPDATE_CLIENTS} keeps the client in syncee. Whole-grid commits
+     * and now. {@code UPDATE_CLIENTS} keeps the client in sync. Whole-grid commits
      * {@link GridSerializer#apply} go through their own path and are deliberately untouched so the
      * two mechanisms stay isolated.
      */
