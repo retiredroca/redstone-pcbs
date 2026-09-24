@@ -53,6 +53,8 @@ moduleDirs.each { moduleDir ->
             include "${groupPath}/neoforge/**"
             include 'META-INF/neoforge.mods.toml'
             include 'META-INF/accesstransformer.cfg'
+            include 'redstonepcbs.neoforge.mixins.json'
+            include 'redstonepcbs.neoforge.refmap.json'
         }
     }
     universalTasks << t

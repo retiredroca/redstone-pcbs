@@ -17,6 +17,9 @@ import java.util.UUID;
 public class LibraryData extends SavedData {
     public record Design(String name, byte[] data) {}
 
+    /** Longest accepted design name. */
+    public static final int MAX_NAME_LENGTH = 32;
+
     private static final String NAME = "redstonepcbs_library";
 
     private final Map<UUID, List<Design>> byPlayer = new HashMap<>();

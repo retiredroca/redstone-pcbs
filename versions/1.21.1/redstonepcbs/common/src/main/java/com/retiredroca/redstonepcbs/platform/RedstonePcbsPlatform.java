@@ -19,6 +19,12 @@ public interface RedstonePcbsPlatform {
 
     boolean isDevelopmentEnvironment();
 
+    /** The loader's config directory (where {@code redstonepcbs.json} is written). */
+    java.nio.file.Path configDirectory();
+
+    /** The game/run directory (where exported blueprints are written). */
+    java.nio.file.Path gameDirectory();
+
     /**
      * Registers the mod's blocks, items, block entity type and data component. Because NeoForge
      * requires registration through deferred holders, the created objects are exposed back through

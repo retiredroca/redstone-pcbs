@@ -15,6 +15,9 @@
       "com.retiredroca.redstonepcbs.fabric.RedstonePcbsFabricClient"
     ]
   },
+  "mixins": [
+    "redstonepcbs.fabric.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=${loader_version}",
     "fabric-api": "*",

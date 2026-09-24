@@ -1,12 +1,12 @@
 package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
-import com.retiredroca.redstonepcbs.chip.ChipSerializer;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.data.ChipData;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -29,12 +29,9 @@ import net.minecraft.world.phys.BlockHitResult;
 
 import org.jetbrains.annotations.Nullable;
 
-/** Interface block for a PCB: right-click to open the editor, six faces carry redstone in/out. */
+/** PCB interface block: right-click opens the editor, and it owns a board region in the board dimension. */
 public class PcbBlock extends Block implements EntityBlock {
-    /**
-     * Mirrors the strongest face output so blocks that react to *state* changes (observers) fire.
-     * The authoritative per-face values are still read from the block entity via getSignal.
-     */
+    /** Mirrors a face output for observers; the board's redstone lives in its region. */
     public static final IntegerProperty POWER = BlockStateProperties.POWER;
 
     public PcbBlock(Properties properties) {
@@ -97,10 +94,11 @@ public class PcbBlock extends Block implements EntityBlock {
     }
 
     @Override
-    protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock,
-            BlockPos neighborPos, boolean movedByPiston) {
-        if (!level.isClientSide && level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
-            be.markInputsDirty();
+    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean movedByPiston) {
+        super.onPlace(state, level, pos, oldState, movedByPiston);
+        if (!level.isClientSide) {
+            // Let adjacent hoppers re-evaluate their lock state.
+            level.updateNeighborsAt(pos, this);
         }
     }
 
@@ -110,9 +108,9 @@ public class PcbBlock extends Block implements EntityBlock {
         if (!level.isClientSide && level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
             ChipData data = stack.get(RedstonePcbs.platform().chip());
             if (data != null && data.data().length > 0) {
-                be.setChip(ChipSerializer.read(data.data()));
-                be.onEdited();
+                be.setGrid(GridSerializer.read(data.data(), level.holderLookup(Registries.BLOCK)));
             }
+            be.ensureRegionNow();
         }
     }
 
@@ -120,24 +118,21 @@ public class PcbBlock extends Block implements EntityBlock {
     public void playerDestroy(Level level, Player player, BlockPos pos, BlockState state,
             @Nullable BlockEntity blockEntity, ItemStack tool) {
         if (!level.isClientSide && blockEntity instanceof PcbBlockEntity be) {
-            be.dropComponentContents();
             ItemStack drop = new ItemStack(RedstonePcbs.platform().pcbItem());
-            drop.set(RedstonePcbs.platform().chip(), new ChipData(ChipSerializer.write(be.chip())));
+            drop.set(RedstonePcbs.platform().chip(), new ChipData(be.snapshotBytes()));
             Block.popResource(level, pos, drop);
+            be.releaseRegion();
         }
     }
 
     @Override
     public int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        if (level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
-            Dir face = Directions.toChip(direction);
-            return be.chip().getFaceOutput(face);
-        }
+        // World-facing redstone is not wired yet; the board's circuit is self-contained.
         return 0;
     }
 
     @Override
     public int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        return getSignal(state, level, pos, direction);
+        return 0;
     }
 }

@@ -5,11 +5,16 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.block.BoardEdit;
+import com.retiredroca.redstonepcbs.block.BoardSpace;
+import com.retiredroca.redstonepcbs.block.BoardStates;
+import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
-import com.retiredroca.redstonepcbs.chip.ChipSerializer;
-import com.retiredroca.redstonepcbs.chip.ChipWorld;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
+import com.retiredroca.redstonepcbs.config.PcbsConfig;
+import com.retiredroca.redstonepcbs.data.Blueprint;
+import com.retiredroca.redstonepcbs.data.LibraryData;
 import com.retiredroca.redstonepcbs.net.C2SEditPayload;
 import com.retiredroca.redstonepcbs.net.C2SLibraryPayload;
 import com.retiredroca.redstonepcbs.net.S2CLibraryPayload;
@@ -25,25 +30,34 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderGetter;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 
 import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * PCB editor: a single perspective 3D view of the board, rendered with vanilla block models, that
  * can be grabbed and spun. Parts are placed/erased/interacted/rotated by ray-picking the grid.
  */
 public class PcbEditorScreen extends Screen {
-    private static final int GRID = 16;
+    private static final int GRID = BoardSpace.SIZE;
     private static final int PAL_COLS = 3;
     private static final int SLOT = 22;
     private static final int BTN_H = 14;
@@ -62,7 +76,9 @@ public class PcbEditorScreen extends Screen {
     private final BlockPos pos;
     private final int slot;
 
-    private ChipWorld local = new ChipWorld();
+    private BlockState[] local = GridSerializer.emptyGrid();
+    private boolean inputOn;
+    private boolean outputOn;
     private Part selected = Part.DUST;
     private Dir pendingFacing = Dir.NORTH;
     private int activeLayer;
@@ -102,10 +118,22 @@ public class PcbEditorScreen extends Screen {
 
     private final List<S2CLibraryPayload.Design> designs = new ArrayList<>();
     private boolean canSaveDesign;
+    private boolean canImport;
+    private int designLimit = PcbsConfig.DEFAULT_MAX_DESIGNS;
     private boolean libraryOpen;
     private int libraryScroll;
-    private boolean filterOpen;
-    private int filterCell;
+    private String designName = "";
+    private boolean naming;
+    private int nameCursor;
+    private int nameFieldX;
+    private int nameFieldY;
+    private int nameFieldW;
+    private int nameFieldH;
+    private String libraryMessage = "";
+    private boolean importOpen;
+    private final List<String> importNames = new ArrayList<>();
+    private final List<Path> importPaths = new ArrayList<>();
+    private int importScroll;
 
     public PcbEditorScreen(int kind, BlockPos pos, int slot, int faceOrdinal) {
         super(Component.translatable("screen.redstonepcbs.editor"));
@@ -127,16 +155,26 @@ public class PcbEditorScreen extends Screen {
     }
 
     public void acceptSnapshot(byte[] data) {
-        local = ChipSerializer.read(data);
-        local.settleNow();
+        local = GridSerializer.read(data, blockLookup());
+    }
+
+    private HolderGetter<Block> blockLookup() {
+        return this.minecraft != null && this.minecraft.level != null
+                ? this.minecraft.level.holderLookup(Registries.BLOCK)
+                : null;
     }
 
     public void acceptLibrary(S2CLibraryPayload payload) {
         designs.clear();
         designs.addAll(payload.designs());
         canSaveDesign = payload.canSave();
+        canImport = payload.canImport();
+        designLimit = payload.limit();
         libraryOpen = true;
+        importOpen = false;
         libraryScroll = 0;
+        naming = false;
+        designName = "";
     }
 
     // --- networking -------------------------------------------------------------------------------
@@ -151,9 +189,20 @@ public class PcbEditorScreen extends Screen {
     }
 
     private void sendLibrary(int action, int index) {
+        sendLibrary(action, index, "");
+    }
+
+    private void sendLibrary(int action, int index, String name) {
         RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
-                ? C2SLibraryPayload.item(slot, action, index)
-                : C2SLibraryPayload.block(pos, action, index));
+                ? C2SLibraryPayload.item(slot, action, index, name)
+                : C2SLibraryPayload.block(pos, action, index, name));
+    }
+
+    private void confirmSave() {
+        naming = false;
+        if (canSaveDesign) {
+            sendLibrary(C2SLibraryPayload.ACTION_SAVE, 0, designName.strip());
+        }
     }
 
     // --- layout -----------------------------------------------------------------------------------
@@ -188,14 +237,15 @@ public class PcbEditorScreen extends Screen {
         buttons.clear();
         paletteSlots.clear();
 
+        if (importOpen) {
+            graphics.fill(0, 0, this.width, this.height, 0xC0000000);
+            renderImportPanel(graphics, mouseX, mouseY);
+            return;
+        }
+
         if (libraryOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderLibrary(graphics, mouseX, mouseY);
-            return;
-        }
-        if (filterOpen) {
-            graphics.fill(0, 0, this.width, this.height, 0xC0000000);
-            renderFilter(graphics, mouseX, mouseY);
             return;
         }
 
@@ -270,6 +320,10 @@ public class PcbEditorScreen extends Screen {
                 LOGGER.error("PCB 3D render failed", t);
             }
         }
+        // Reset the depth buffer so the wireframe, panel and tooltips draw over the block models.
+        graphics.flush();
+        RenderSystem.clearDepth(1.0);
+        RenderSystem.disableDepthTest();
         drawBoundsAndGizmo(graphics);
         graphics.disableScissor();
     }
@@ -347,15 +401,15 @@ public class PcbEditorScreen extends Screen {
             MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
             PoseStack pose = new PoseStack();
 
-            for (int i = 0; i < local.cellCount(); i++) {
-                if (local.cell(i).isEmpty() || local.cell(i).part == Part.GLASS || enclosed(i)) {
+            for (int i = 0; i < GridSerializer.COUNT; i++) {
+                if (local[i].isAir() || local[i].is(Blocks.GLASS) || enclosed(i)) {
                     continue;
                 }
                 drawModelCell(dispatcher, buffers, pose, i);
             }
             buffers.endBatch();
-            for (int i = 0; i < local.cellCount(); i++) {
-                if (local.cell(i).part == Part.GLASS) {
+            for (int i = 0; i < GridSerializer.COUNT; i++) {
+                if (local[i].is(Blocks.GLASS)) {
                     drawModelCell(dispatcher, buffers, pose, i);
                 }
             }
@@ -387,8 +441,8 @@ public class PcbEditorScreen extends Screen {
     private void drawModelCell(BlockRenderDispatcher dispatcher, MultiBufferSource.BufferSource buffers,
             PoseStack pose, int index) {
         pose.pushPose();
-        pose.translate(local.xOf(index), local.yOf(index), local.zOf(index));
-        dispatcher.renderSingleBlock(PcbBlockStates.stateFor(local.cell(index)), pose, buffers,
+        pose.translate(BoardSpace.xOf(index), BoardSpace.yOf(index), BoardSpace.zOf(index));
+        dispatcher.renderSingleBlock(local[index], pose, buffers,
                 LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
         pose.popPose();
     }
@@ -411,19 +465,18 @@ public class PcbEditorScreen extends Screen {
 
     private boolean enclosed(int index) {
         for (Dir d : Dir.VALUES) {
-            int x = local.xOf(index) + d.dx;
-            int y = local.yOf(index) + d.dy;
-            int z = local.zOf(index) + d.dz;
-            if (!local.inBounds(x, y, z) || !isFullOpaque(local.cell(local.index(x, y, z)).part)) {
+            int x = BoardSpace.xOf(index) + d.dx;
+            int y = BoardSpace.yOf(index) + d.dy;
+            int z = BoardSpace.zOf(index) + d.dz;
+            if (!inGrid(x, y, z) || !local[BoardSpace.index(x, y, z)].canOcclude()) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean isFullOpaque(Part part) {
-        return part == Part.SOLID || part == Part.REDSTONE_BLOCK || part == Part.LAMP
-                || part == Part.OBSERVER || part == Part.NOTE_BLOCK || part == Part.HOPPER;
+    private static boolean inGrid(int x, int y, int z) {
+        return x >= 0 && x < BoardSpace.SIZE && y >= 0 && y < BoardSpace.SIZE && z >= 0 && z < BoardSpace.SIZE;
     }
 
     // --- picking ----------------------------------------------------------------------------------
@@ -477,13 +530,13 @@ public class PcbEditorScreen extends Screen {
             int cx = (int) Math.floor(a.x + dir.x * t);
             int cy = (int) Math.floor(a.y + dir.y * t);
             int cz = (int) Math.floor(a.z + dir.z * t);
-            if (!local.inBounds(cx, cy, cz) || (cx == px && cy == py && cz == pz)) {
+            if (!inGrid(cx, cy, cz) || (cx == px && cy == py && cz == pz)) {
                 continue;
             }
             px = cx;
             py = cy;
             pz = cz;
-            if (!local.cell(local.index(cx, cy, cz)).isEmpty()) {
+            if (!local[BoardSpace.index(cx, cy, cz)].isAir()) {
                 hoverBlock = new int[]{cx, cy, cz};
                 break;
             }
@@ -502,7 +555,7 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (libraryOpen) {
+        if (importOpen) {
             for (Button b : buttons) {
                 if (b.contains(mouseX, mouseY)) {
                     b.action.run();
@@ -511,13 +564,20 @@ public class PcbEditorScreen extends Screen {
             }
             return true;
         }
-        if (filterOpen) {
+        if (libraryOpen) {
+            if (inNameField(mouseX, mouseY)) {
+                naming = true;
+                nameCursor = designName.length();
+                return true;
+            }
             for (Button b : buttons) {
                 if (b.contains(mouseX, mouseY)) {
+                    naming = false;
                     b.action.run();
                     return true;
                 }
             }
+            naming = false;
             return true;
         }
         for (Button b : buttons) {
@@ -581,30 +641,23 @@ public class PcbEditorScreen extends Screen {
         raycast(mouseX, mouseY);
         if (button == 1) {
             if (hoverBlock != null) {
-                int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
-                Part part = local.cell(index).part;
-                boolean hopperFilter = part == Part.HOPPER && local.isFilterHopperMode();
-                if (hopperFilter && kind == C2SEditPayload.KIND_BLOCK) {
-                    // Simple-mode hoppers open a filter picker instead of a container UI.
-                    filterOpen = true;
-                    filterCell = index;
-                } else if (part.isContainer() && kind == C2SEditPayload.KIND_BLOCK) {
+                int index = BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
+                Part part = BoardStates.partOf(local[index]);
+                if (part.isContainer() && kind == C2SEditPayload.KIND_BLOCK) {
                     EditorReturn.stash(this);
                     send(C2SEditPayload.ACTION_OPEN_UI, index, null, null, false);
                 } else {
                     send(C2SEditPayload.ACTION_INTERACT, index, null, null, false);
-                    local.interact(index);
-                    local.settleNow();
+                    local[index] = BoardEdit.interact(local[index]);
                 }
             }
             return;
         }
         if (hasShiftDown()) {
             if (hoverBlock != null) {
-                int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
+                int index = BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
                 send(C2SEditPayload.ACTION_CLEAR, index, null, null, false);
-                local.clear(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
-                local.settleNow();
+                local[index] = Blocks.AIR.defaultBlockState();
             }
             return;
         }
@@ -614,7 +667,7 @@ public class PcbEditorScreen extends Screen {
     }
 
     private void placeAt(int x, int y, int z) {
-        int index = local.index(x, y, z);
+        int index = BoardSpace.index(x, y, z);
         Part part = selected;
         if (part == Part.AIR) {
             return;
@@ -624,21 +677,19 @@ public class PcbEditorScreen extends Screen {
             return;
         }
         send(C2SEditPayload.ACTION_SET, index, part, facing, false);
-        local.set(index, part, facing);
-        local.settleNow();
+        local[index] = BoardStates.initial(part, facing);
     }
 
     private Dir resolveFacing(Part part, int x, int y, int z) {
-        int index = local.index(x, y, z);
         Dir hit = adjacentDir(x, y, z);
         return switch (part.facingFamily()) {
             case TORCH -> {
                 // Attach to the clicked face if it can support a torch, else any supported side.
-                if (hit != null && local.hasSupport(index, hit)) {
+                if (hit != null && hasSupport(x, y, z, hit)) {
                     yield hit;
                 }
                 for (Dir d : Part.SUPPORTED_ORDER) {
-                    if (local.hasSupport(index, d)) {
+                    if (hasSupport(x, y, z, d)) {
                         yield d;
                     }
                 }
@@ -657,6 +708,16 @@ public class PcbEditorScreen extends Screen {
             case FACE_ATTACHED -> part.sanitizeFacing(hit != null ? hit : Dir.DOWN);
             case NONE -> Dir.UP;
         };
+    }
+
+    private boolean hasSupport(int x, int y, int z, Dir dir) {
+        if (dir == Dir.DOWN && y == 0) {
+            return true;
+        }
+        int nx = x + dir.dx;
+        int ny = y + dir.dy;
+        int nz = z + dir.dz;
+        return inGrid(nx, ny, nz) && local[BoardSpace.index(nx, ny, nz)].canOcclude();
     }
 
     /** Direction from the cell at (x,y,z) to the currently hovered block, or null if not adjacent. */
@@ -727,13 +788,70 @@ public class PcbEditorScreen extends Screen {
     }
 
     @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        if (naming) {
+            if (codePoint >= ' ' && codePoint != '\u00a7' && designName.length() < LibraryData.MAX_NAME_LENGTH) {
+                int cursor = Math.max(0, Math.min(nameCursor, designName.length()));
+                designName = designName.substring(0, cursor) + codePoint + designName.substring(cursor);
+                nameCursor = cursor + 1;
+            }
+            return true;
+        }
+        return super.charTyped(codePoint, modifiers);
+    }
+
+    @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        int index = hoverBlock == null ? -1 : local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
+        if (importOpen) {
+            if (keyCode == 256) { // Escape
+                importOpen = false;
+            }
+            return true;
+        }
+        if (naming) {
+            switch (keyCode) {
+                case 257, 335 -> { // Enter / keypad Enter
+                    confirmSave();
+                    return true;
+                }
+                case 256 -> { // Escape
+                    naming = false;
+                    return true;
+                }
+                case 259 -> { // Backspace
+                    if (nameCursor > 0 && !designName.isEmpty()) {
+                        int cursor = Math.min(nameCursor, designName.length());
+                        designName = designName.substring(0, cursor - 1) + designName.substring(cursor);
+                        nameCursor = cursor - 1;
+                    }
+                    return true;
+                }
+                case 261 -> { // Delete
+                    if (nameCursor < designName.length()) {
+                        designName = designName.substring(0, nameCursor) + designName.substring(nameCursor + 1);
+                    }
+                    return true;
+                }
+                case 262 -> { // Right
+                    nameCursor = Math.min(designName.length(), nameCursor + 1);
+                    return true;
+                }
+                case 263 -> { // Left
+                    nameCursor = Math.max(0, nameCursor - 1);
+                    return true;
+                }
+                default -> {
+                    // Let charTyped consume printable keys; swallow everything else so hotkeys stay off.
+                    return true;
+                }
+            }
+        }
+        int index = hoverBlock == null ? -1 : BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
         switch (keyCode) {
             case 82 -> { // R
                 if (index >= 0) {
                     send(C2SEditPayload.ACTION_ROTATE, index, null, null, false);
-                    local.rotate(index);
+                    local[index] = BoardEdit.rotate(local[index]);
                 } else {
                     rotatePendingFacing();
                 }
@@ -742,14 +860,14 @@ public class PcbEditorScreen extends Screen {
             case 68 -> { // D
                 if (index >= 0) {
                     send(C2SEditPayload.ACTION_CYCLE_DELAY, index, null, null, false);
-                    local.cycleRepeaterDelay(index);
+                    local[index] = BoardEdit.cycleDelay(local[index]);
                 }
                 return true;
             }
             case 77 -> { // M
                 if (index >= 0) {
                     send(C2SEditPayload.ACTION_TOGGLE_MODE, index, null, null, false);
-                    local.toggleComparatorMode(index);
+                    local[index] = BoardEdit.toggleComparatorMode(local[index]);
                 }
                 return true;
             }
@@ -837,20 +955,34 @@ public class PcbEditorScreen extends Screen {
         y += BTN_H + 2;
         addButton(graphics, px, y, 100, BTN_H, "Pulse Layer", () -> {
             send(C2SEditPayload.ACTION_PULSE_LAYER, activeLayer, null, null, false);
-            local.pulseLayer(activeLayer);
-            local.settleNow();
+            for (int lx = 0; lx < BoardSpace.SIZE; lx++) {
+                for (int lz = 0; lz < BoardSpace.SIZE; lz++) {
+                    int idx = BoardSpace.index(lx, activeLayer, lz);
+                    local[idx] = BoardEdit.pulse(local[idx]);
+                }
+            }
         });
+        y += BTN_H + 2;
+
+        graphics.drawString(this.font, "Signal", px, y, 0xFFFFFF, false);
+        y += 10;
+        addButton(graphics, px, y, 66, BTN_H, inputOn ? "Input: On" : "Input: Off",
+                () -> {
+                    send(C2SEditPayload.ACTION_TOGGLE_INPUT, 0, null, null, false);
+                    inputOn = !inputOn;
+                });
+        addButton(graphics, px + 70, y, 70, BTN_H, outputOn ? "Output: On" : "Output: Off",
+                () -> {
+                    send(C2SEditPayload.ACTION_TOGGLE_OUTPUT, 0, null, null, false);
+                    outputOn = !outputOn;
+                });
         y += BTN_H + 4;
 
-        int libW = 56;
-        String hopperLabel = local.isFilterHopperMode() ? "Hopper: Filter" : "Hopper: Vanilla";
-        int hopW = Math.max(56, this.font.width(hopperLabel) + 6);
-        addButton(graphics, px, y, libW, BTN_H, "Library", () -> {
+        addButton(graphics, px, y, 100, BTN_H, "Library", () -> {
+            libraryMessage = "";
             libraryOpen = true;
             sendLibrary(C2SLibraryPayload.ACTION_LIST, 0);
         });
-        addButton(graphics, px + libW + 2, y, hopW, BTN_H, hopperLabel,
-                () -> send(C2SEditPayload.ACTION_TOGGLE_HOPPER_MODE, 0, null, null, false));
         y += BTN_H + 4;
 
         graphics.drawString(this.font, "Drag: spin  L: place", px, y, 0x9F9F9F, false);
@@ -887,23 +1019,30 @@ public class PcbEditorScreen extends Screen {
 
     private void renderLibrary(GuiGraphics graphics, int mouseX, int mouseY) {
         int rows = Math.min(designs.size(), 8);
-        int w = 250;
-        int h = 46 + Math.max(rows, 1) * 18 + 22;
+        int listH = Math.max(rows, 1) * 18;
+        int w = 300;
+        int h = 44 + listH + 48;
         int x = (this.width - w) / 2;
         int y = (this.height - h) / 2;
         graphics.fill(x, y, x + w, y + h, 0xFF202020);
         graphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0xFF3C3C3C);
         graphics.drawString(this.font, "Saved Designs", x + 8, y + 8, 0xFFFFFF, false);
-        graphics.drawString(this.font, "saved per player; paper is consumed on save", x + 8, y + 19, 0x909090,
-                false);
-        int rowY = y + 32;
+        graphics.drawString(this.font, designs.size() + "/" + designLimit
+                + " saved per player; paper is consumed on save", x + 8, y + 19, 0x909090, false);
+        if (!libraryMessage.isEmpty()) {
+            graphics.drawString(this.font, fit(libraryMessage, w - 16), x + 8, y + 30, 0xA0D0A0, false);
+        }
+        int rowY = y + 44;
         for (int i = 0; i < rows; i++) {
             final int idx = libraryScroll + i;
             if (idx >= designs.size()) {
                 break;
             }
-            graphics.drawString(this.font, designs.get(idx).name(), x + 8, rowY + 3, 0xE0E0E0, false);
+            graphics.drawString(this.font, fit(designs.get(idx).name(), w - 118), x + 8, rowY + 3, 0xE0E0E0,
+                    false);
+            addButton(graphics, x + w - 102, rowY, 28, 14, "Exp", () -> exportDesign(idx));
             addButton(graphics, x + w - 72, rowY, 30, 14, "Use", () -> {
+                libraryMessage = "";
                 sendLibrary(C2SLibraryPayload.ACTION_APPLY, idx);
                 libraryOpen = false;
             });
@@ -916,55 +1055,134 @@ public class PcbEditorScreen extends Screen {
         }
         int by = y + h - 18;
         if (designs.size() > 8) {
-            addButton(graphics, x + 84, by, 18, 14, "-", () -> libraryScroll = Math.max(0, libraryScroll - 1));
-            addButton(graphics, x + 104, by, 18, 14, "+", () -> libraryScroll = Math.min(
+            addButton(graphics, x + w / 2 - 18, by, 18, 14, "-",
+                    () -> libraryScroll = Math.max(0, libraryScroll - 1));
+            addButton(graphics, x + w / 2 + 2, by, 18, 14, "+", () -> libraryScroll = Math.min(
                     Math.max(0, designs.size() - 8), libraryScroll + 1));
         }
-        addButton(graphics, x + 8, by, 78, 14, canSaveDesign ? "Save Design" : "Need Paper", () -> {
-            if (canSaveDesign) {
-                sendLibrary(C2SLibraryPayload.ACTION_SAVE, 0);
+        addButton(graphics, x + 8, by, 70, 14, canImport ? "Import" : "Import Off", () -> {
+            if (canImport) {
+                refreshImport();
+                libraryMessage = "";
+                importOpen = true;
             }
         });
         addButton(graphics, x + w - 60, by, 52, 14, "Close", () -> libraryOpen = false);
+
+        int nameRow = y + 44 + listH + 4;
+        int saveW = 58;
+        nameFieldX = x + 8;
+        nameFieldY = nameRow;
+        nameFieldW = w - 16 - saveW - 4;
+        nameFieldH = 16;
+        drawNameField(graphics);
+        String saveLabel = designs.size() >= designLimit ? "Full"
+                : (canSaveDesign ? "Save" : "No Paper");
+        addButton(graphics, x + w - 8 - saveW, nameRow, saveW, 16, saveLabel, this::confirmSave);
     }
 
-    /** Filter-mode hopper: pick the single item that is allowed through. */
-    private void renderFilter(GuiGraphics graphics, int mouseX, int mouseY) {
-        int cols = 5;
-        int cell = 24;
-        int rows = (int) Math.ceil(PcbIcons.PALETTE.length / (double) cols);
-        int w = cols * cell + 16;
-        int h = 44 + rows * cell + 24;
+    private void renderImportPanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        int rows = Math.min(importNames.size(), 8);
+        int listH = Math.max(rows, 1) * 18;
+        int w = 320;
+        int h = 32 + listH + 44;
         int x = (this.width - w) / 2;
         int y = (this.height - h) / 2;
         graphics.fill(x, y, x + w, y + h, 0xFF202020);
         graphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0xFF3C3C3C);
-        graphics.drawString(this.font, "Hopper Filter", x + 8, y + 8, 0xFFFFFF, false);
-        graphics.drawString(this.font, "pick one item; only it passes through", x + 8, y + 19, 0x909090, false);
-
-        int gx = x + 8;
-        int gy = y + 34;
-        for (int i = 0; i < PcbIcons.PALETTE.length; i++) {
-            Part part = PcbIcons.PALETTE[i];
-            int sx = gx + (i % cols) * cell;
-            int sy = gy + (i / cols) * cell;
-            boolean hovered = mouseX >= sx && mouseX < sx + cell - 2 && mouseY >= sy && mouseY < sy + cell - 2;
-            graphics.fill(sx, sy, sx + cell - 2, sy + cell - 2, hovered ? 0xFFFFE080 : 0xFF373737);
-            graphics.fill(sx + 1, sy + 1, sx + cell - 3, sy + cell - 3, 0xFF8B8B8B);
-            drawItem(graphics, PcbIcons.stackFor(part), sx + 3, sy + 3, 16);
-            final Part filterPart = part;
-            buttons.add(new Button(sx, sy, cell - 2, cell - 2, () -> {
-                send(C2SEditPayload.ACTION_SET_FILTER, filterCell, filterPart, null, false);
-                filterOpen = false;
-            }));
+        graphics.drawString(this.font, "Import Blueprint", x + 8, y + 8, 0xFFFFFF, false);
+        graphics.drawString(this.font, "Files in " + BlueprintFiles.FOLDER, x + 8, y + 19, 0x909090, false);
+        int rowY = y + 32;
+        for (int i = 0; i < rows; i++) {
+            final int idx = importScroll + i;
+            if (idx >= importNames.size()) {
+                break;
+            }
+            graphics.drawString(this.font, fit(importNames.get(idx), w - 70), x + 8, rowY + 3, 0xE0E0E0, false);
+            addButton(graphics, x + w - 48, rowY, 40, 14, "Add", () -> importAt(idx));
+            rowY += 18;
         }
+        if (importNames.isEmpty()) {
+            graphics.drawString(this.font, "(no .json files found)", x + 8, rowY + 3, 0x909090, false);
+        }
+        int by = y + h - 18;
+        if (importNames.size() > 8) {
+            addButton(graphics, x + w / 2 - 18, by, 18, 14, "-",
+                    () -> importScroll = Math.max(0, importScroll - 1));
+            addButton(graphics, x + w / 2 + 2, by, 18, 14, "+", () -> importScroll = Math.min(
+                    Math.max(0, importNames.size() - 8), importScroll + 1));
+        }
+        addButton(graphics, x + 8, by, 60, 14, "Refresh", this::refreshImport);
+        addButton(graphics, x + w - 60, by, 52, 14, "Back", () -> importOpen = false);
+        if (!libraryMessage.isEmpty()) {
+            graphics.drawString(this.font, fit(libraryMessage, w - 16), x + 8, y + h - 30, 0xA0D0A0, false);
+        }
+    }
 
-        int by = y + h - 20;
-        addButton(graphics, x + 8, by, 64, BTN_H, "Clear", () -> {
-            send(C2SEditPayload.ACTION_CLEAR_FILTER, filterCell, null, null, false);
-            filterOpen = false;
-        });
-        addButton(graphics, x + w - 72, by, 64, BTN_H, "Close", () -> filterOpen = false);
+    private void refreshImport() {
+        importNames.clear();
+        importPaths.clear();
+        for (Path path : BlueprintFiles.list()) {
+            importNames.add(path.getFileName().toString());
+            importPaths.add(path);
+        }
+        importScroll = 0;
+    }
+
+    private void exportDesign(int idx) {
+        if (idx < 0 || idx >= designs.size()) {
+            return;
+        }
+        S2CLibraryPayload.Design design = designs.get(idx);
+        try {
+            Path file = BlueprintFiles.write(design.name(), design.data());
+            libraryMessage = "Exported " + file.getFileName();
+        } catch (Exception e) {
+            libraryMessage = "Export failed";
+        }
+    }
+
+    private void importAt(int idx) {
+        if (idx < 0 || idx >= importPaths.size()) {
+            return;
+        }
+        try {
+            Blueprint blueprint = BlueprintFiles.read(importPaths.get(idx));
+            RedstonePcbs.platform().sendToServer(new C2SLibraryPayload(kind, slot, pos,
+                    C2SLibraryPayload.ACTION_IMPORT, 0, blueprint.name(), blueprint.grid()));
+            libraryMessage = "Importing " + blueprint.name() + "...";
+            importOpen = false;
+        } catch (Exception e) {
+            libraryMessage = "Could not read " + importNames.get(idx);
+        }
+    }
+
+    private void drawNameField(GuiGraphics graphics) {
+        int fx = nameFieldX;
+        int fy = nameFieldY;
+        int fw = nameFieldW;
+        int fh = nameFieldH;
+        graphics.fill(fx, fy, fx + fw, fy + fh, naming ? 0xFF101010 : 0xFF181818);
+        int border = naming ? 0xFF9FA9FF : 0xFF606060;
+        graphics.fill(fx, fy, fx + fw, fy + 1, border);
+        graphics.fill(fx, fy + fh - 1, fx + fw, fy + fh, border);
+        graphics.fill(fx, fy, fx + 1, fy + fh, border);
+        graphics.fill(fx + fw - 1, fy, fx + fw, fy + fh, border);
+        if (designName.isEmpty() && !naming) {
+            graphics.drawString(this.font, "Name (optional)", fx + 4, fy + 4, 0xFF707070, false);
+        } else {
+            graphics.drawString(this.font, fit(designName, fw - 8), fx + 4, fy + 4, 0xFFFFFF, false);
+        }
+        if (naming && (System.currentTimeMillis() / 500L) % 2L == 0L) {
+            int cursor = Math.max(0, Math.min(nameCursor, designName.length()));
+            int cx = fx + 4 + this.font.width(designName.substring(0, cursor));
+            graphics.fill(cx, fy + 3, cx + 1, fy + fh - 3, 0xFFFFFFFF);
+        }
+    }
+
+    private boolean inNameField(double mouseX, double mouseY) {
+        return mouseX >= nameFieldX && mouseX < nameFieldX + nameFieldW
+                && mouseY >= nameFieldY && mouseY < nameFieldY + nameFieldH;
     }
 
     private void drawItem(GuiGraphics graphics, ItemStack stack, int x, int y, int size) {
@@ -982,45 +1200,40 @@ public class PcbEditorScreen extends Screen {
     private void drawTooltips(GuiGraphics graphics, int mouseX, int mouseY) {
         for (PaletteSlot slot : paletteSlots) {
             if (slot.contains(mouseX, mouseY)) {
-                List<Component> lines = new ArrayList<>();
-                lines.add(PcbIcons.nameOf(slot.part));
-                graphics.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
+                setTooltipForNextRenderPass(PcbIcons.nameOf(slot.part));
                 return;
             }
         }
         if (hoverBlock != null) {
-            int index = local.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
-            var c = local.cell(index);
+            int index = BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
+            BlockState state = local[index];
             List<Component> lines = new ArrayList<>();
-            lines.add(PcbIcons.nameOf(c.part));
-            if (c.part == Part.DUST) {
-                lines.add(Component.literal("power " + c.power));
-            } else if (c.part == Part.REPEATER) {
-                lines.add(Component.literal("delay " + (c.delay + 1)));
-            } else if (c.part == Part.COMPARATOR) {
-                lines.add(Component.literal(c.subtract ? "subtract" : "compare"));
+            lines.add(state.getBlock().getName());
+            if (state.hasProperty(net.minecraft.world.level.block.RepeaterBlock.DELAY)) {
+                lines.add(Component.literal("delay "
+                        + state.getValue(net.minecraft.world.level.block.RepeaterBlock.DELAY)));
+            } else if (state.hasProperty(net.minecraft.world.level.block.ComparatorBlock.MODE)) {
+                lines.add(Component.literal(
+                        state.getValue(net.minecraft.world.level.block.ComparatorBlock.MODE)
+                                == net.minecraft.world.level.block.state.properties.ComparatorMode.SUBTRACT
+                                        ? "subtract" : "compare"));
+            } else if (state.is(Blocks.REDSTONE_WIRE)) {
+                lines.add(Component.literal("power "
+                        + state.getValue(net.minecraft.world.level.block.RedStoneWireBlock.POWER)));
             }
-            if (c.part.isContainer() && kind == C2SEditPayload.KIND_BLOCK && this.minecraft != null
-                    && this.minecraft.level != null
-                    && this.minecraft.level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
-                if (c.part == Part.HOPPER && local.isFilterHopperMode()) {
-                    ItemStack filter = be.filter();
-                    lines.add(filter.isEmpty()
-                            ? Component.literal("filter: none")
-                            : Component.literal("filter: ").append(filter.getHoverName()));
-                } else {
-                    List<ItemStack> contents = be.contentsView(index);
-                    if (contents.isEmpty()) {
-                        lines.add(Component.literal("empty"));
-                    } else {
-                        for (ItemStack stack : contents) {
-                            lines.add(Component.literal(stack.getCount() + "x ").append(stack.getHoverName()));
-                        }
-                    }
-                }
-            }
-            graphics.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
+            setTooltipForNextRenderPass(join(lines));
         }
+    }
+
+    private static Component join(List<Component> lines) {
+        net.minecraft.network.chat.MutableComponent joined = Component.empty();
+        for (int i = 0; i < lines.size(); i++) {
+            if (i > 0) {
+                joined.append("\n");
+            }
+            joined.append(lines.get(i));
+        }
+        return joined;
     }
 
     private void computeInventory() {
@@ -1066,13 +1279,10 @@ public class PcbEditorScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
-        // Advance the local engine every two game ticks (one redstone tick) so delayed parts -
-        // buttons releasing, torches/repeaters/observers firing - animate while editing.
+        // Ask the server for the board every two ticks so live redstone changes show up.
         if (++localTickCounter >= 2) {
             localTickCounter = 0;
-            if (local.isActive()) {
-                local.tick();
-            }
+            send(C2SEditPayload.ACTION_REQUEST, 0, null, null, false);
         }
     }
 

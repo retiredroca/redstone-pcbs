@@ -10,6 +10,9 @@ description='''
 Design and simulate redstone circuits on a compact voxel board.
 '''
 
+[[mixins]]
+config = "redstonepcbs.neoforge.mixins.json"
+
 [[dependencies.${mod_id}]]
     modId="neoforge"
     type="required"

@@ -11,35 +11,51 @@ save-persistent redstone board inside a single block.
   orthographic 3D view: drag to orbit, `Ctrl`+drag to pan, `Ctrl`+scroll to zoom toward the cursor, and
   the scroll wheel (or the layer buttons) to step the active layer. The view presets are laid out in
   three rows (NE/SE/SW/NW, N/E/S/W, Top). Left-click places the selected part, `Shift`+left-click
-  erases, right-click interacts (toggles levers/buttons, or opens a container's UI), `R` rotates the
-  hovered part, `D` cycles a repeater's delay, `M` toggles comparator mode, and a Reset button
-  recentres the view. The active layer is outlined, and **Pulse Layer** toggles every lever and presses
-  every button on that layer so a circuit can be started from a chosen slice. The editor runs the
-  circuit locally, so delayed parts (buttons releasing, torches/repeaters/observers firing) animate
-  while you edit. Parts show their vanilla item icon, and the side palette is an inventory-style list
-  with names, counts and tooltips.
-- **Real redstone parts** - dust, torches, repeaters, comparators, blocks of redstone, levers,
-  buttons, solid blocks and lamps, with vanilla-like signal strength, weak/strong power and delays.
-  Redstone dust shapes itself from its neighbours (line, corner, cross, or climbing up the side of a
-  block) and can only be shaped by hand while isolated. The simulation is deterministic (no
-  quasi-connectivity / update-order quirks) and runs on the server.
-- **Six-sided I/O** - each face of the board participates in redstone with whatever block touches
-  it: adjacent signals feed the boundary cells, and boundary emitters drive the adjacent block.
-- **Attached parts** - because each face joins the world's redstone, pistons, dispensers,
-  droppers, note blocks, doors, lamps and rails can be driven from the board, observers pulse on its
-  output, and a comparator in the board can read a chest/hopper/barrel touching a face.
+  erases, right-click interacts (toggles levers/buttons, cycles a repeater's delay, toggles comparator
+  mode, or opens a container/hopper UI), `R` rotates the hovered part, `D` cycles a repeater's delay,
+  `M` toggles comparator mode, and a Reset button recentres the view. The active layer is outlined, and
+  **Pulse Layer** toggles every lever and presses every button on that layer. Parts show their vanilla
+  item icon, and the side palette is an inventory-style list with names, counts and tooltips.
+- **Vanilla redstone** - the board's circuit is a real 16x16x16 region of a hidden board dimension,
+  so Minecraft itself runs the redstone: signal strength, dust shapes, torch/repeater/comparator/observer
+  timings, hopper locks, quasi-connectivity and all. The board dimension is an empty, void world
+  registered by the mod at server start (no datapack), so it adds no worldgen and never triggers an
+  experimental-settings warning. Boards are laid out one per chunk on a stride-2 grid, so each board
+  has a clear one-chunk border on all sides (including diagonals); the board's own chunk is held
+  ticking so redstone runs with no player nearby, and the border chunks are held loaded without
+  ticking. Breaking a board packs the region back into the PCB item; placing it writes it back.
+  The dimension's height and mob-spawning settings are code parameters, so taller boards and
+  in-board mob spawning can be enabled later.
+- **Signal section** - the editor shows **Input** and **Output** switches (both off by default). The
+  board's redstone is currently self-contained; world-facing redstone I/O is not wired yet.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
-  world). "Save Design" costs one paper in survival, and loading a design back onto a board consumes
-  the matching items in survival.
-- **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or (in vanilla
-  hopper mode) a hopper inside the board. Right-click one in the editor to open its normal vanilla UI,
-  and it processes exactly like the world block (smelting, brewing, crafting, item transfer); adjacent
-  comparators read its signal strength. Hovering a container shows its contents in the tooltip.
-  Breaking the board or removing a container spills its contents instead of deleting them.
-- **Hopper modes** - the editor's Hopper button switches between **filter** and **vanilla** mode. In
-  filter mode a hopper holds a single filter item (right-click the hopper to pick it) and the gate
-  only lets matching items through; in vanilla mode the hopper runs its full 5-slot vanilla UI and
-  logic.
+  world). A design's name is typed in the panel's name field; "Save" costs one paper in survival, and
+  loading a design back onto a board consumes the matching items in survival. The per-player limit is
+  `maxDesigns` in `config/redstonepcbs.json` (default 16), so single-player and creative worlds can
+  raise it.
+- **Sharing blueprints** - the Library panel exports a design with "Exp" to
+  `redstonepcbs/blueprints/<name>.json` and imports files from that folder with "Import". A blueprint
+  is a small JSON document (name + base64 grid), so designs can be copied between worlds and players.
+  Importing is free (no paper) but still counts against the per-player limit; set `allowImport` to
+  `false` in the config to disable it.
+- **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or hopper inside
+  the board. Right-click one in the editor to open its normal vanilla UI; it processes and transfers
+  items exactly like the world block, and comparators read it natively.
+- **Hoppers** - real vanilla hoppers with their 5-slot UI. Filtering is the vanilla technique: lock the
+  hopper with a redstone signal, put the 41 + 4 reference items in, and read it with a comparator.
+- **Item gateway** - the board exchanges items with world hoppers through the PCB block. Each face
+  maps to the in-board containers on that face's **edge layer** (bottom face -> the board's lowest
+  layer `y=0`, top face -> `y=15`, the four sides -> their edge columns), one port per grid line.
+  - **Bottom** - an in-world hopper attached under the PCB pulls from any hopper (whatever its facing)
+    or processor (furnace, blast furnace, smoker, brewer) sitting on the board's lowest layer.
+  - **Top** - the block above the PCB may be air or a container (hopper, chest, furnace, blast
+    furnace, smoker, brewer); the board pulls down from it, so a hopper chain passing over the top
+    feeds the board.
+  - **Sides** - receive only, and only from a hopper directly attached to that side.
+  Slots and direction checks are delegated to the in-board container's own vanilla rules, so a furnace
+  or brewing stand keeps its real face restrictions, while a plain hopper exposes all five slots as it
+  does in the world. This is **items only** - world-facing **redstone** in/out is not wired yet (the
+  Signal toggles are placeholders).
 
 Components are the vanilla items (redstone, torch, repeater, comparator, block of redstone, lever,
 button, stone, glass, lamp, observer, note block, hopper, furnace, blast furnace, smoker, brewing
@@ -52,7 +68,6 @@ every part is available. The PCB itself appears in the vanilla Redstone Blocks c
 ```bash
 ./gradlew build              # default Minecraft version (gradle.properties -> mc)
 ./gradlew -Pmc=1.21.1 build  # a specific Minecraft version
-./gradlew :enginetest:test   # pure-Java redstone engine tests
 ./gradlew cleanArtifacts     # wipe every generated jar/dir (use before a fully fresh build)
 ```
 
@@ -75,22 +90,26 @@ their metadata carry the full version. Override with `-PversionStamp=<stamp>` or
 ```
 versions/<mc>/<module>/
 ├─ common/                 # engine + gameplay (loader-agnostic)          -> relocated per loader
-│  ├─ .../chip/            # pure-Java redstone engine (unit-tested, no Minecraft imports)
-│  ├─ .../block/           # PcbBlock, PcbBlockEntity
-│  ├─ .../item/            # PcbItem (block item carrying the saved chip component)
+│  ├─ .../block/           # PcbBlock, PcbBlockEntity, the board region (BoardSpace, BoardChunks,
+│  │                       #   GridSerializer, BoardStates, BoardEdit, BoardMenus)
+│  ├─ .../dimension/       # PcbDimension + RuntimeDimension: the empty board dimension
+│  ├─ .../chip/            # palette metadata (Part, Dir) for the editor
+│  ├─ .../item/            # PcbItem (block item carrying the saved grid component)
 │  ├─ .../content/         # registry ids shared by both loaders
+│  ├─ .../config/          # PcbsConfig (config/redstonepcbs.json)
 │  ├─ .../craft/           # survival item consume/craft logic for parts
-│  ├─ .../data/            # saved designs (SavedData) + chip component
+│  ├─ .../data/            # saved designs (SavedData), grid component, Blueprint JSON, level.dat scrub
 │  ├─ .../net/             # editor payloads + server-side edit handling
 │  ├─ .../platform/        # loader abstraction implemented by each loader
-│  ├─ .../client/          # editor screen (client-only, never loaded on a dedicated server)
-│  └─ src/main/resources/  # assets + data (shared by both loaders)
-├─ fabric/                 # Fabric Loom build
-└─ neoforge/               # NeoGradle build
-enginetest/                # standalone JUnit project for the chip engine
+│  ├─ .../client/          # editor screen + blueprint file I/O (client-only)
+│  └─ src/main/resources/  # assets + data (loot table, recipe)
+├─ fabric/                 # Fabric Loom build (+ mixins that create the board dimension)
+└─ neoforge/               # NeoGradle build (+ mixins that create the board dimension)
 ```
 
-The two loader builds each compile `common/` into a loader-specific relocated package and are merged
-into a single universal jar.
+The board's circuit lives as real blocks in the empty board dimension, so Minecraft runs the
+redstone; the editor syncs that region to the client as a palette + index snapshot. The dimension is
+registered in code at server start (never a datapack entry, and its key is kept out of
+`WorldGenSettings`), so worlds never show an experimental-settings warning.
 
 See `PROJECT-GUIDE.md` for building and adding Minecraft versions and `RELEASE-GUIDE.md` for releases.

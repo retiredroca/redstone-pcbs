@@ -12,7 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Server -> client copy of the player's saved-designs library. */
-public record S2CLibraryPayload(List<Design> designs, boolean canSave) implements CustomPacketPayload {
+public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit, boolean canImport)
+        implements CustomPacketPayload {
     /** A saved design: a display name and the serialized chip. */
     public record Design(String name, byte[] data) {}
 
@@ -22,6 +23,8 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave) implement
     public static final StreamCodec<ByteBuf, S2CLibraryPayload> STREAM_CODEC = StreamCodec.of(
             (buf, payload) -> {
                 buf.writeBoolean(payload.canSave());
+                buf.writeBoolean(payload.canImport());
+                buf.writeInt(payload.limit());
                 buf.writeInt(payload.designs().size());
                 for (Design design : payload.designs()) {
                     ByteBufCodecs.STRING_UTF8.encode(buf, design.name());
@@ -30,6 +33,8 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave) implement
             },
             buf -> {
                 boolean canSave = buf.readBoolean();
+                boolean canImport = buf.readBoolean();
+                int limit = buf.readInt();
                 int count = buf.readInt();
                 List<Design> designs = new ArrayList<>(count);
                 for (int i = 0; i < count; i++) {
@@ -37,7 +42,7 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave) implement
                     byte[] data = ByteBufCodecs.BYTE_ARRAY.decode(buf);
                     designs.add(new Design(name, data));
                 }
-                return new S2CLibraryPayload(designs, canSave);
+                return new S2CLibraryPayload(designs, canSave, limit, canImport);
             });
 
     @Override

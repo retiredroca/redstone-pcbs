@@ -41,6 +41,16 @@ public class FabricPlatform implements RedstonePcbsPlatform {
     }
 
     @Override
+    public java.nio.file.Path configDirectory() {
+        return FabricLoader.getInstance().getConfigDir();
+    }
+
+    @Override
+    public java.nio.file.Path gameDirectory() {
+        return FabricLoader.getInstance().getGameDir();
+    }
+
+    @Override
     public void registerContent() {
         PcbBlock pcbBlock = new PcbBlock(PcbBlock.boardProperties());
         Registry.register(BuiltInRegistries.BLOCK, ModContent.PCB_BLOCK_ID, pcbBlock);

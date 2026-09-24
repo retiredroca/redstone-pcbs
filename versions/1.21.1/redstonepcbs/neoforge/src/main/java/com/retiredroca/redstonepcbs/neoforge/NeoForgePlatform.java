@@ -24,6 +24,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.loading.FMLEnvironment;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
@@ -73,19 +74,30 @@ public class NeoForgePlatform implements RedstonePcbsPlatform {
     }
 
     @Override
+    public java.nio.file.Path configDirectory() {
+        return FMLPaths.CONFIGDIR.get();
+    }
+
+    @Override
+    public java.nio.file.Path gameDirectory() {
+        return FMLPaths.GAMEDIR.get();
+    }
+
+    @Override
     public void registerContent() {
         blocks.register(modBus);
         items.register(modBus);
         blockEntities.register(modBus);
         dataComponents.register(modBus);
-        modBus.addListener(this::registerCapabilities);
         modBus.addListener(this::addCreativeTabEntries);
+        modBus.addListener(this::onModMismatch);
+        modBus.addListener(this::registerCapabilities);
     }
 
-    private void addCreativeTabEntries(
-            net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
-        if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS) {
-            event.accept(pcbItem.get());
+    /** Declares our own version changes as resolved so NeoForge does not warn about them. */
+    private void onModMismatch(net.neoforged.neoforge.event.ModMismatchEvent event) {
+        if (event.getVersionDifference(RedstonePcbs.MOD_ID).isPresent()) {
+            event.markResolved(RedstonePcbs.MOD_ID);
         }
     }
 
@@ -93,6 +105,13 @@ public class NeoForgePlatform implements RedstonePcbsPlatform {
         event.registerBlockEntity(net.neoforged.neoforge.capabilities.Capabilities.ItemHandler.BLOCK,
                 pcbBeType.get(),
                 (be, side) -> new net.neoforged.neoforge.items.wrapper.SidedInvWrapper(be, side));
+    }
+
+    private void addCreativeTabEntries(
+            net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
+        if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.REDSTONE_BLOCKS) {
+            event.accept(pcbItem.get());
+        }
     }
 
     @Override

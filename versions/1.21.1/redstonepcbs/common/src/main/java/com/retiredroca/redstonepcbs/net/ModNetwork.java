@@ -1,30 +1,36 @@
 package com.retiredroca.redstonepcbs.net;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.block.BoardEdit;
+import com.retiredroca.redstonepcbs.block.BoardSpace;
+import com.retiredroca.redstonepcbs.block.BoardStates;
+import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
-import com.retiredroca.redstonepcbs.chip.ChipSerializer;
-import com.retiredroca.redstonepcbs.chip.ChipWorld;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
+import com.retiredroca.redstonepcbs.config.PcbsConfig;
+import com.retiredroca.redstonepcbs.craft.Crafting;
+import com.retiredroca.redstonepcbs.data.Blueprint;
 import com.retiredroca.redstonepcbs.data.ChipData;
 import com.retiredroca.redstonepcbs.data.LibraryData;
 import com.retiredroca.redstonepcbs.item.PcbItem;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Server-side handling for editor edits and the saved-designs library. Kept loader-agnostic; each
- * loader's networking adapter routes received packets here and runs them on the server thread.
+ * Server-side handling for editor edits and the saved-designs library. Edits read the board's region
+ * grid, change it, write it back (so Minecraft re-runs the redstone), and reply with a snapshot.
  */
 public final class ModNetwork {
     private static final double MAX_EDIT_DISTANCE_SQR = 64.0;
@@ -39,7 +45,7 @@ public final class ModNetwork {
         RedstonePcbs.platform().sendToPlayer(player,
                 new S2COpenEditorPayload(C2SEditPayload.KIND_ITEM, BlockPos.ZERO, slot, Dir.UP.ordinal()));
         RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.item(slot, ChipSerializer.write(readChip(stack))));
+                S2CSnapshotPayload.item(slot, GridSerializer.write(readGrid(player, stack))));
     }
 
     public static void handleEdit(ServerPlayer player, C2SEditPayload payload) {
@@ -58,31 +64,32 @@ public final class ModNetwork {
                 payload.pos().getZ() + 0.5) > MAX_EDIT_DISTANCE_SQR) {
             return;
         }
-        ChipWorld chip = be.chip();
-        if (payload.action() == C2SEditPayload.ACTION_SET_FILTER
-                || payload.action() == C2SEditPayload.ACTION_CLEAR_FILTER) {
-            Part filterPart = payload.action() == C2SEditPayload.ACTION_CLEAR_FILTER
-                    ? Part.AIR : Part.byOrdinal(payload.part());
-            Item filterItem = itemFor(filterPart);
-            be.setFilter(filterItem == null ? ItemStack.EMPTY : new ItemStack(filterItem));
-            be.onEdited();
-            RedstonePcbs.platform().sendToPlayer(player,
-                    S2CSnapshotPayload.block(payload.pos(), ChipSerializer.write(chip)));
-            return;
-        }
-        if (payload.action() == C2SEditPayload.ACTION_OPEN_UI) {
-            MenuProvider provider = be.componentMenu(payload.index());
-            if (provider != null) {
-                player.openMenu(provider);
+        switch (payload.action()) {
+            case C2SEditPayload.ACTION_OPEN_UI -> {
+                openUi(player, be, payload.index());
+                return;
             }
-            return;
+            case C2SEditPayload.ACTION_TOGGLE_INPUT -> {
+                be.setExternalInput(!be.isExternalInput());
+                return;
+            }
+            case C2SEditPayload.ACTION_TOGGLE_OUTPUT -> {
+                be.setExternalOutput(!be.isExternalOutput());
+                return;
+            }
+            case C2SEditPayload.ACTION_REQUEST -> {
+                sendBlockSnapshot(player, payload.pos(), be);
+                return;
+            }
+            default -> {
+            }
         }
-        boolean changed = apply(player, chip, payload);
-        if (changed) {
+        BlockState[] grid = be.grid();
+        if (apply(player, grid, payload)) {
+            be.setGrid(grid);
             be.onEdited();
         }
-        RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.block(payload.pos(), ChipSerializer.write(chip)));
+        sendBlockSnapshot(player, payload.pos(), be);
     }
 
     private static void editItem(ServerPlayer player, C2SEditPayload payload) {
@@ -90,15 +97,151 @@ public final class ModNetwork {
         if (!(stack.getItem() instanceof PcbItem)) {
             return;
         }
-        ChipWorld chip = readChip(stack);
-        boolean changed = apply(player, chip, payload);
-        if (changed) {
-            stack.set(RedstonePcbs.platform().chip(), new ChipData(ChipSerializer.write(chip)));
+        if (payload.action() == C2SEditPayload.ACTION_REQUEST) {
+            sendItemSnapshot(player, payload.slot(), readGrid(player, stack));
+            return;
+        }
+        BlockState[] grid = readGrid(player, stack);
+        if (apply(player, grid, payload)) {
+            stack.set(RedstonePcbs.platform().chip(), new ChipData(GridSerializer.write(grid)));
             player.getInventory().setChanged();
             player.inventoryMenu.broadcastChanges();
         }
+        sendItemSnapshot(player, payload.slot(), grid);
+    }
+
+    private static void openUi(ServerPlayer player, PcbBlockEntity be, int index) {
+        BoardSpace space = be.space();
+        if (space == null) {
+            return;
+        }
+        BlockEntity target = space.blockEntity(index);
+        if (target != null) {
+            com.retiredroca.redstonepcbs.block.BoardMenus.open(player, target);
+        }
+    }
+
+    private static void sendBlockSnapshot(ServerPlayer player, BlockPos pos, PcbBlockEntity be) {
+        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.block(pos, be.snapshotBytes()));
+    }
+
+    private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid) {
         RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.item(payload.slot(), ChipSerializer.write(chip)));
+                S2CSnapshotPayload.item(slot, GridSerializer.write(grid)));
+    }
+
+    // --- edit application -------------------------------------------------------------------------
+
+    private static boolean apply(ServerPlayer player, BlockState[] grid, C2SEditPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= GridSerializer.COUNT) {
+            return false;
+        }
+        return switch (payload.action()) {
+            case C2SEditPayload.ACTION_SET -> setCell(player, grid, index, payload);
+            case C2SEditPayload.ACTION_CLEAR -> clearCell(player, grid, index);
+            case C2SEditPayload.ACTION_ROTATE -> {
+                grid[index] = BoardEdit.rotate(grid[index]);
+                yield true;
+            }
+            case C2SEditPayload.ACTION_CYCLE_DELAY -> {
+                grid[index] = BoardEdit.cycleDelay(grid[index]);
+                yield true;
+            }
+            case C2SEditPayload.ACTION_TOGGLE_MODE -> {
+                grid[index] = BoardEdit.toggleComparatorMode(grid[index]);
+                yield true;
+            }
+            case C2SEditPayload.ACTION_INTERACT -> {
+                grid[index] = BoardEdit.interact(grid[index]);
+                yield true;
+            }
+            case C2SEditPayload.ACTION_PULSE_LAYER -> {
+                pulseLayer(grid, index);
+                yield true;
+            }
+            case C2SEditPayload.ACTION_CLEAR_ALL -> {
+                clearAll(player, grid);
+                yield true;
+            }
+            default -> false;
+        };
+    }
+
+    private static boolean setCell(ServerPlayer player, BlockState[] grid, int index, C2SEditPayload payload) {
+        Part part = Part.byOrdinal(payload.part());
+        if (part == Part.AIR) {
+            return clearCell(player, grid, index);
+        }
+        BlockState old = grid[index];
+        if (old.getBlock() == BoardStates.initial(part, Dir.byOrdinal(payload.facing())).getBlock()) {
+            return false;
+        }
+        if (!player.isCreative()) {
+            Item item = itemFor(part);
+            if (item == null || !Crafting.consume(player, item)) {
+                return false;
+            }
+        }
+        if (!old.isAir()) {
+            refund(player, old);
+        }
+        grid[index] = BoardStates.initial(part, Dir.byOrdinal(payload.facing()));
+        return true;
+    }
+
+    private static boolean clearCell(ServerPlayer player, BlockState[] grid, int index) {
+        BlockState old = grid[index];
+        if (old.isAir()) {
+            return false;
+        }
+        refund(player, old);
+        grid[index] = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+        return true;
+    }
+
+    private static void clearAll(ServerPlayer player, BlockState[] grid) {
+        for (int i = 0; i < grid.length; i++) {
+            if (!grid[i].isAir()) {
+                refund(player, grid[i]);
+                grid[i] = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+            }
+        }
+    }
+
+    private static void pulseLayer(BlockState[] grid, int layer) {
+        if (layer < 0 || layer >= BoardSpace.SIZE) {
+            return;
+        }
+        for (int x = 0; x < BoardSpace.SIZE; x++) {
+            for (int z = 0; z < BoardSpace.SIZE; z++) {
+                int index = BoardSpace.index(x, layer, z);
+                grid[index] = BoardEdit.pulse(grid[index]);
+            }
+        }
+    }
+
+    private static void refund(ServerPlayer player, BlockState state) {
+        if (player.isCreative()) {
+            return;
+        }
+        Item item = state.getBlock().asItem();
+        if (item != Items.AIR) {
+            give(player, new ItemStack(item));
+        }
+    }
+
+    private static void give(ServerPlayer player, ItemStack stack) {
+        if (!player.getInventory().add(stack)) {
+            player.drop(stack, false);
+        }
+    }
+
+    public static BlockState[] readGrid(ServerPlayer player, ItemStack stack) {
+        ChipData data = stack.get(RedstonePcbs.platform().chip());
+        return data != null && data.data().length > 0
+                ? GridSerializer.read(data.data(), player.level().holderLookup(Registries.BLOCK))
+                : GridSerializer.emptyGrid();
     }
 
     // --- library ----------------------------------------------------------------------------------
@@ -118,6 +261,11 @@ public final class ModNetwork {
                 applyDesign(player, payload);
                 sendLibrary(player);
             }
+            case C2SLibraryPayload.ACTION_IMPORT -> {
+                if (importDesign(player, payload)) {
+                    sendLibrary(player);
+                }
+            }
             default -> sendLibrary(player);
         }
     }
@@ -128,21 +276,69 @@ public final class ModNetwork {
         for (LibraryData.Design design : saved) {
             designs.add(new S2CLibraryPayload.Design(design.name(), design.data()));
         }
-        boolean canSave = player.isCreative() || countItem(player, Items.PAPER) > 0;
-        RedstonePcbs.platform().sendToPlayer(player, new S2CLibraryPayload(designs, canSave));
+        int limit = PcbsConfig.maxDesigns();
+        boolean canSave = saved.size() < limit
+                && (player.isCreative() || Crafting.count(player, Items.PAPER) > 0);
+        RedstonePcbs.platform().sendToPlayer(player,
+                new S2CLibraryPayload(designs, canSave, limit, PcbsConfig.allowImport()));
     }
 
     private static boolean saveDesign(ServerPlayer player, C2SLibraryPayload payload) {
-        ChipWorld chip = targetChip(player, payload);
-        if (chip == null) {
-            return false;
-        }
-        if (!player.isCreative() && !consumeItem(player, Items.PAPER, 1)) {
+        BlockState[] grid = targetGrid(player, payload);
+        if (grid == null) {
             return false;
         }
         LibraryData data = LibraryData.get(player.serverLevel());
         List<LibraryData.Design> list = data.designs(player.getUUID());
-        list.add(new LibraryData.Design("Design " + (list.size() + 1), ChipSerializer.write(chip)));
+        if (list.size() >= PcbsConfig.maxDesigns()) {
+            return false;
+        }
+        if (!player.isCreative() && !Crafting.consume(player, Items.PAPER)) {
+            return false;
+        }
+        list.add(new LibraryData.Design(cleanName(payload.name(), "Design " + (list.size() + 1)),
+                GridSerializer.write(grid)));
+        data.setDirty();
+        return true;
+    }
+
+    /** Trims a player-supplied name to a printable, bounded label. */
+    private static String cleanName(String raw, String fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        String trimmed = raw.strip();
+        StringBuilder out = new StringBuilder(Math.min(trimmed.length(), LibraryData.MAX_NAME_LENGTH));
+        for (int i = 0; i < trimmed.length() && out.length() < LibraryData.MAX_NAME_LENGTH; i++) {
+            char c = trimmed.charAt(i);
+            if (c >= ' ' && c != '\u00a7') {
+                out.append(c);
+            }
+        }
+        String name = out.toString().strip();
+        return name.isEmpty() ? fallback : name;
+    }
+
+    /** Adds a shared blueprint to the player's library, validating the bytes first. */
+    private static boolean importDesign(ServerPlayer player, C2SLibraryPayload payload) {
+        if (!PcbsConfig.allowImport()) {
+            return false;
+        }
+        byte[] bytes = payload.data();
+        if (bytes == null || bytes.length == 0 || bytes.length > Blueprint.MAX_GRID_BYTES) {
+            return false;
+        }
+        try {
+            GridSerializer.read(bytes, player.level().holderLookup(Registries.BLOCK));
+        } catch (RuntimeException e) {
+            return false;
+        }
+        LibraryData data = LibraryData.get(player.serverLevel());
+        List<LibraryData.Design> list = data.designs(player.getUUID());
+        if (list.size() >= PcbsConfig.maxDesigns()) {
+            return false;
+        }
+        list.add(new LibraryData.Design(cleanName(payload.name(), "Imported " + (list.size() + 1)), bytes));
         data.setDirty();
         return true;
     }
@@ -162,245 +358,33 @@ public final class ModNetwork {
         if (payload.index() < 0 || payload.index() >= list.size()) {
             return;
         }
-        ChipWorld current = targetChip(player, payload);
-        if (current == null) {
-            return;
-        }
-        ChipWorld design = ChipSerializer.read(list.get(payload.index()).data());
-        if (!pay(player, design)) {
-            return;
-        }
-        refundAll(player, current);
-        setTargetChip(player, payload, design);
-        syncTarget(player, payload);
+        BlockState[] design = GridSerializer.read(list.get(payload.index()).data(),
+                player.level().holderLookup(Registries.BLOCK));
+        setTargetGrid(player, payload, design);
     }
 
-    private static ChipWorld targetChip(ServerPlayer player, C2SLibraryPayload payload) {
+    private static BlockState[] targetGrid(ServerPlayer player, C2SLibraryPayload payload) {
         if (payload.kind() == C2SEditPayload.KIND_ITEM) {
             ItemStack stack = player.getInventory().getItem(payload.slot());
-            return stack.getItem() instanceof PcbItem ? readChip(stack) : null;
+            return stack.getItem() instanceof PcbItem ? readGrid(player, stack) : null;
         }
-        return player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be ? be.chip() : null;
+        return player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be ? be.grid() : null;
     }
 
-    private static void setTargetChip(ServerPlayer player, C2SLibraryPayload payload, ChipWorld chip) {
+    private static void setTargetGrid(ServerPlayer player, C2SLibraryPayload payload, BlockState[] grid) {
         if (payload.kind() == C2SEditPayload.KIND_ITEM) {
             ItemStack stack = player.getInventory().getItem(payload.slot());
             if (stack.getItem() instanceof PcbItem) {
-                stack.set(RedstonePcbs.platform().chip(), new ChipData(ChipSerializer.write(chip)));
+                stack.set(RedstonePcbs.platform().chip(), new ChipData(GridSerializer.write(grid)));
                 player.getInventory().setChanged();
                 player.inventoryMenu.broadcastChanges();
+                sendItemSnapshot(player, payload.slot(), grid);
             }
         } else if (player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be) {
-            be.setChip(chip);
+            be.setGrid(grid);
             be.onEdited();
+            sendBlockSnapshot(player, payload.pos(), be);
         }
-    }
-
-    private static void syncTarget(ServerPlayer player, C2SLibraryPayload payload) {
-        if (payload.kind() == C2SEditPayload.KIND_ITEM) {
-            ItemStack stack = player.getInventory().getItem(payload.slot());
-            RedstonePcbs.platform().sendToPlayer(player,
-                    S2CSnapshotPayload.item(payload.slot(), ChipSerializer.write(readChip(stack))));
-        } else {
-            RedstonePcbs.platform().sendToPlayer(player,
-                    S2CSnapshotPayload.block(payload.pos(), ChipSerializer.write(
-                            player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be
-                                    ? be.chip() : new ChipWorld())));
-        }
-    }
-
-    /** Checks the player can afford every part in {@code design}, then consumes the items. */
-    private static boolean pay(ServerPlayer player, ChipWorld design) {
-        if (player.isCreative()) {
-            return true;
-        }
-        Map<Item, Integer> need = new LinkedHashMap<>();
-        for (int i = 0; i < design.cellCount(); i++) {
-            Part part = design.cell(i).part;
-            if (part != Part.AIR) {
-                Item item = itemFor(part);
-                if (item != null) {
-                    need.merge(item, 1, Integer::sum);
-                }
-            }
-        }
-        for (Map.Entry<Item, Integer> e : need.entrySet()) {
-            if (countItem(player, e.getKey()) < e.getValue()) {
-                return false;
-            }
-        }
-        for (Map.Entry<Item, Integer> e : need.entrySet()) {
-            consumeItem(player, e.getKey(), e.getValue());
-        }
-        return true;
-    }
-
-    // --- edit actions -----------------------------------------------------------------------------
-
-    public static ChipWorld readChip(ItemStack stack) {
-        ChipData data = stack.get(RedstonePcbs.platform().chip());
-        return data != null && data.data().length > 0 ? ChipSerializer.read(data.data()) : new ChipWorld();
-    }
-
-    private static boolean apply(ServerPlayer player, ChipWorld chip, C2SEditPayload payload) {
-        int index = payload.index();
-        if (index < 0 || index >= chip.cellCount()) {
-            return false;
-        }
-        return switch (payload.action()) {
-            case C2SEditPayload.ACTION_SET -> setCell(player, chip, index, payload);
-            case C2SEditPayload.ACTION_CLEAR -> clearCell(player, chip, index);
-            case C2SEditPayload.ACTION_INTERACT -> {
-                chip.interact(index);
-                yield true;
-            }
-            case C2SEditPayload.ACTION_ROTATE -> {
-                chip.rotate(index);
-                yield true;
-            }
-            case C2SEditPayload.ACTION_CYCLE_DELAY -> {
-                chip.cycleRepeaterDelay(index);
-                yield true;
-            }
-            case C2SEditPayload.ACTION_TOGGLE_MODE -> {
-                chip.toggleComparatorMode(index);
-                yield true;
-            }
-            case C2SEditPayload.ACTION_TOGGLE_HOPPER_MODE -> {
-                chip.toggleHopperMode();
-                yield true;
-            }
-            case C2SEditPayload.ACTION_PULSE_LAYER -> {
-                chip.pulseLayer(payload.index());
-                yield true;
-            }
-            case C2SEditPayload.ACTION_CLEAR_ALL -> {
-                refundAll(player, chip);
-                chip.clearAll();
-                yield true;
-            }
-            default -> false;
-        };
-    }
-
-    private static boolean setCell(ServerPlayer player, ChipWorld chip, int index, C2SEditPayload payload) {
-        Part part = Part.byOrdinal(payload.part());
-        if (part == Part.AIR) {
-            return clearCell(player, chip, index);
-        }
-        Part old = chip.cell(index).part;
-        if (old == part) {
-            return false;
-        }
-        Dir facing = Dir.byOrdinal(payload.facing());
-        if (part.needsSupport()) {
-            facing = supportedFacing(chip, index, facing);
-            if (facing == null) {
-                return false;
-            }
-        } else {
-            facing = part.sanitizeFacing(facing);
-        }
-        if (!player.isCreative()) {
-            Item item = itemFor(part);
-            if (item == null || !com.retiredroca.redstonepcbs.craft.Crafting.consume(player, item)) {
-                return false;
-            }
-        }
-        if (old != Part.AIR) {
-            refund(player, old);
-        }
-        chip.set(index, part, facing);
-        chip.cell(index).subtract = (payload.flags() & C2SEditPayload.FLAG_SUBTRACT) != 0;
-        return true;
-    }
-
-    private static Dir supportedFacing(ChipWorld chip, int index, Dir requested) {
-        if (chip.hasSupport(index, requested)) {
-            return requested;
-        }
-        for (Dir d : Part.SUPPORTED_ORDER) {
-            if (chip.hasSupport(index, d)) {
-                return d;
-            }
-        }
-        return null;
-    }
-
-    private static boolean clearCell(ServerPlayer player, ChipWorld chip, int index) {
-        Part old = chip.cell(index).part;
-        if (old == Part.AIR) {
-            return false;
-        }
-        chip.clear(chip.xOf(index), chip.yOf(index), chip.zOf(index));
-        refund(player, old);
-        return true;
-    }
-
-    private static void refundAll(ServerPlayer player, ChipWorld chip) {
-        for (int i = 0; i < chip.cellCount(); i++) {
-            Part part = chip.cell(i).part;
-            if (part != Part.AIR && part != Part.SOLID) {
-                refund(player, part);
-            }
-        }
-    }
-
-    private static void refund(ServerPlayer player, Part part) {
-        if (player.isCreative()) {
-            return;
-        }
-        Item item = itemFor(part);
-        if (item != null) {
-            give(player, new ItemStack(item));
-        }
-    }
-
-    private static void give(ServerPlayer player, ItemStack stack) {
-        if (!player.getInventory().add(stack)) {
-            player.drop(stack, false);
-        }
-    }
-
-    private static int countItem(ServerPlayer player, Item item) {
-        int count = 0;
-        for (ItemStack stack : player.getInventory().items) {
-            if (stack.is(item)) {
-                count += stack.getCount();
-            }
-        }
-        for (ItemStack stack : player.getInventory().offhand) {
-            if (stack.is(item)) {
-                count += stack.getCount();
-            }
-        }
-        return count;
-    }
-
-    private static boolean consumeItem(ServerPlayer player, Item item, int amount) {
-        int remaining = amount;
-        for (ItemStack stack : player.getInventory().items) {
-            if (stack.is(item)) {
-                int take = Math.min(remaining, stack.getCount());
-                stack.shrink(take);
-                remaining -= take;
-                if (remaining == 0) {
-                    return true;
-                }
-            }
-        }
-        for (ItemStack stack : player.getInventory().offhand) {
-            if (stack.is(item)) {
-                int take = Math.min(remaining, stack.getCount());
-                stack.shrink(take);
-                remaining -= take;
-                if (remaining == 0) {
-                    return true;
-                }
-            }
-        }
-        return remaining == 0;
     }
 
     public static Item itemFor(Part part) {
