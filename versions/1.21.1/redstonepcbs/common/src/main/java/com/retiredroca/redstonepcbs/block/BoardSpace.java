@@ -72,8 +72,16 @@ public final class BoardSpace {
         return level.getBlockState(pos(x, y, z));
     }
 
+    /**
+     * Places a cell at placement time. {@code UPDATE_NEIGHBORS} fires the standard neighbour and
+     * shape update pass for this one cell (exactly the "update neighbour instead of update all"
+     * change from the old era), so freshly placed wires connect and their redstone reacts here
+     * and now. {@code UPDATE_CLIENTS} keeps the client in syncee. Whole-grid commits
+     * {@link GridSerializer#apply} go through their own path and are deliberately untouched so the
+     * two mechanisms stay isolated.
+     */
     public void set(int x, int y, int z, BlockState state) {
-        level.setBlock(pos(x, y, z), state, Block.UPDATE_ALL);
+        level.setBlock(pos(x, y, z), state, Block.UPDATE_NEIGHBORS | Block.UPDATE_CLIENTS);
     }
 
     public BlockEntity blockEntity(int index) {
@@ -90,6 +98,25 @@ public final class BoardSpace {
         for (int i = 0; i < SIZE * SIZE * SIZE; i++) {
             if (!get(i).isAir()) {
                 level.setBlock(pos(i), Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+        }
+    }
+
+    /**
+     * Ensures the smooth-stone layer one block below the grid. Sits at {@code relativeY = -1}
+     * (world {@code baseY-1}) so it never occupies a cell of the usable 16x16x16 region, and it is
+     * outside every {@link #clear()} / region-sweep path (those only iterate the grid cells), so it
+     * survives reload unharmed and is idempotent. Placement uses {@code UPDATE_CLIENTS} only: the
+     * floor is structural, not redstone, and must not itself fire neighbour updates.
+     */
+    public void ensureFloor() {
+        BlockState floor = Blocks.SMOOTH_STONE.defaultBlockState();
+        for (int x = 0; x < SIZE; x++) {
+            for (int z = 0; z < SIZE; z++) {
+                BlockPos p = pos(x, -1, z);
+                if (!level.getBlockState(p).equals(floor)) {
+                    level.setBlock(p, floor, Block.UPDATE_CLIENTS);
+                }
             }
         }
     }

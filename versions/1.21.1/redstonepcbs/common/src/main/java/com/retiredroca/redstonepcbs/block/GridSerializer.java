@@ -1,11 +1,13 @@
 package com.retiredroca.redstonepcbs.block;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderGetter;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtUtils;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -92,11 +94,21 @@ public final class GridSerializer {
         }
     }
 
-    /** Applies a grid to a board region. */
+    /**
+     * Applies a grid to a board region. Each changed cell is placed with the same flag the editor's
+     * per-cell placement uses ({@code UPDATE_NEIGHBORS | UPDATE_CLIENTS}), so every cell fires the
+     * standard vanilla neighbour and shape pass here and now, exactly as if the block had been
+     * placed in a normal chunk. Redstone propagation therefore happens in the board dimension where
+     * the block sits, and the grid never sends its own signals through the region.
+     */
     public static void apply(BlockState[] grid, BoardSpace space) {
+        ServerLevel level = space.level();
         for (int i = 0; i < COUNT; i++) {
-            space.set(BoardSpace.xOf(i), BoardSpace.yOf(i), BoardSpace.zOf(i),
-                    grid[i] == null ? Blocks.AIR.defaultBlockState() : grid[i]);
+            BlockState state = grid[i] == null ? Blocks.AIR.defaultBlockState() : grid[i];
+            BlockPos pos = space.pos(i);
+            if (!state.equals(level.getBlockState(pos))) {
+                level.setBlock(pos, state, Block.UPDATE_NEIGHBORS | Block.UPDATE_CLIENTS);
+            }
         }
     }
 

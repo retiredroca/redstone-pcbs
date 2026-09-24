@@ -45,8 +45,15 @@ public final class PcbDimension {
     public static final int HEIGHT = 384;
     /** Logical height (fog/portal clamping); at most {@link #HEIGHT}. */
     public static final int LOGICAL_HEIGHT = HEIGHT;
-    /** World Y where a board region's bottom layer sits. */
-    public static final int BOARD_BASE_Y = 0;
+    /**
+     * World Y where a board region's bottom layer sits. Raised from 0 to keep boards clear of both
+     * the -64..0 cellar and the top world border: with an all-air generator there is no terrain
+     * collision, but the original working (End-era) config kept the board away from the bottom and
+     * the borders)Skip; 288 puts the 16-tall board at 288..303 with a 16-block gap (304..319) to the
+     * build ceiling (320). This is a single derivation point: {@code getSeaLevel()} and every board
+     * base Y computation follow from it.
+     */
+    public static final int BOARD_BASE_Y = 288;
 
     /** Whether the dimension has skylight. Off: the board needs no light simulation. */
     public static final boolean SKYLIGHT = false;

@@ -21,28 +21,39 @@ import java.util.Set;
  * Allocates one chunk per board inside the board dimension {@link PcbDimension}.
  *
  * <p>Boards are laid out on a stride-2 grid, so every board is separated from the next by one clear
- * chunk in all directions (including diagonals). The board's own chunk is held <em>ticking</em> so
- * its redstone runs with no player nearby, and the 8 neighbours are held <em>lazy-loaded</em> so the
- * cleared border around each board stays loaded without ticking. Board chunks are refcounted, so the
- * ring chunks shared by adjacent boards are only released when the last board that needs them is gone.
+ * chunk in all directions (including diagonals). The board's own chunk is held <em>ticking</em> by
+ * <em>two</em> mechanisms, and the 8 neighbours are held <em>lazy-loaded</em> so the cleared border
+ * around each board stays loaded without ticking. Board chunks are refcounted, so the ring chunks
+ * shared by adjacent boards are only released when the last board that needs them is gone.
+ *
+ * <p>Why both? A plain {@link TicketType} region ticket keeps the chunk block-ticking like the
+ * remote-access terminal's chunk loader ({@code redstonepcbs:board}, distance 2 = level 31), but it
+ * never satisfies {@code ServerLevel.tick}'s keep-alive gate, so block entities still stop after 300
+ * empty ticks once the board is created. {@link ServerLevel#setChunkForced} records the chunk in the
+ * dimension's {@code ForcedChunksSavedData}, which that gate reads ({@code flag1 = !players.isEmpty()
+ * || !getForcedChunks().isEmpty()}, vanilla {@code ServerLevel.java:383,388}), keeping entity and
+ * block entity ticking with no player. The forced entry persists until explicitly cleared, so
+ * {@link #free} must un-force on the last ref (and drop the ticket).
  */
 public final class BoardChunks extends SavedData {
     private static final String NAME = "redstonepcbs_boards";
 
     /**
-     * The board's own chunk is kept ticking by {@link ServerLevel#setChunkForced}, not by a region
-     * ticket. Forced chunks are recorded in the dimension's {@code ForcedChunksSavedData}, which
-     * {@code ServerLevel.tick}'s keep-alive gate reads: {@code flag1 = !players.isEmpty() ||
-     * !getForcedChunks().isEmpty()} (vanilla {@code ServerLevel.java:383,388}) keeps entity and block
-     * entity ticking with no player in the dimension. A plain region ticket keeps the chunk loaded
-     * but never satisfies that gate, so block entities stop after 300 empty ticks (~15 s). The forced
-     * entry persists until it is explicitly cleared, so {@link #free} must un-force on the last ref.
-     *
-     * <p>Border chunks are kept loaded without ticking by a plain {@link TicketType} region ticket.
+     * Region ticket that keeps a board chunk loading and ticking with no player nearby. Distance 2
+     * gives ticket level {@code ChunkLevel.byStatus(FULL) - 2 = 31} (entity ticking), which satisfies
+     * {@code shouldTickBlocksAt} (level &le; 32) so the chunk's scheduled redstone ticks run. The
+     * plain {@link TicketType#create} form and the four-argument {@code addRegionTicket} are the same
+     * on both loaders (the remote-access terminal uses this exact pattern), unlike NeoForge's
+     * force-ticks overload.
      */
+    private static final TicketType<ChunkPos> BOARD =
+            TicketType.create("redstonepcbs:board", Comparator.comparingLong(ChunkPos::toLong));
+    /** Ticket keeping a border chunk loaded without ticking it. */
     private static final TicketType<ChunkPos> BORDER =
             TicketType.create("redstonepcbs:board_border", Comparator.comparingLong(ChunkPos::toLong));
 
+    /** Ticket distance that makes a chunk fully tick (level 31). */
+    private static final int TICKING_DISTANCE = 2;
     /** Ticket distance that keeps a chunk loaded without ticking (level 33). */
     private static final int LAZY_DISTANCE = 0;
     /** Gap in chunks between boards, so each board has a clear neighbour ring. */
@@ -90,12 +101,40 @@ public final class BoardChunks extends SavedData {
         setDirty();
     }
 
-    /** Stride-2 grid walk: boards never share an edge or corner, leaving a one-chunk gap. */
+    /**
+     * Off-corner clockwise spiral allocation. Boards start one chunk in from the dimension's origin
+     * corner (chunk {@code (1,1)}), so the very first board already gets a full 8-chunk lazy border
+     * ring on every side (including toward the origin corner) instead of the asymmetric ring a board
+     * sitting on the {@code (0,0)} corner gets. Subsequent boards spiral clockwise around the origin
+     * with the same one-chunk padding as before: consecutive spiral cells map to chunks two apart on
+     * the {@code STRIDE} grid, so every board keeps a clear one-chunk border ring.
+     */
     private static ChunkPos chunkFor(int index) {
-        return new ChunkPos(index * STRIDE, 0);
+        int x = 0;
+        int z = 0;
+        int dx = 1;
+        int dz = 0;
+        int segment = 1;
+        int steps = 0;
+        int legs = 0;
+        for (int i = 0; i < index; i++) {
+            x += dx;
+            z += dz;
+            if (++steps == segment) {
+                int tmp = dx;
+                dx = -dz;
+                dz = tmp;
+                steps = 0;
+                if (++legs == 2) {
+                    legs = 0;
+                    segment++;
+                }
+            }
+        }
+        return new ChunkPos(1 + x * STRIDE, 1 + z * STRIDE);
     }
 
-    /** Rebuilds refcounts and re-applies every ticket once, after a reload. */
+    /** Rebuilds refcounts and re-applies every ticket and forced entry once, after a reload. */
     private void restore(ServerLevel level) {
         if (restored) {
             return;
@@ -113,6 +152,7 @@ public final class BoardChunks extends SavedData {
         for (long packed : Set.copyOf(tickingRefs.keySet())) {
             ChunkPos chunk = new ChunkPos(packed);
             force(level, chunk);
+            addTicket(level, chunk, TICKING_DISTANCE, BOARD);
         }
         for (long packed : Set.copyOf(borderRefs.keySet())) {
             ChunkPos chunk = new ChunkPos(packed);
@@ -123,6 +163,7 @@ public final class BoardChunks extends SavedData {
     private void retain(ServerLevel level, ChunkPos chunk) {
         if (tickingRefs.merge(ChunkPos.asLong(chunk.x, chunk.z), 1, Integer::sum) == 1) {
             force(level, chunk);
+            addTicket(level, chunk, TICKING_DISTANCE, BOARD);
         }
         for (ChunkPos border : neighbours(chunk)) {
             if (borderRefs.merge(ChunkPos.asLong(border.x, border.z), 1, Integer::sum) == 1) {
@@ -134,6 +175,7 @@ public final class BoardChunks extends SavedData {
     private void release(ServerLevel level, ChunkPos chunk) {
         if (decrement(tickingRefs, chunk)) {
             unforce(level, chunk);
+            removeTicket(level, chunk, TICKING_DISTANCE, BOARD);
         }
         for (ChunkPos border : neighbours(chunk)) {
             if (decrement(borderRefs, border)) {

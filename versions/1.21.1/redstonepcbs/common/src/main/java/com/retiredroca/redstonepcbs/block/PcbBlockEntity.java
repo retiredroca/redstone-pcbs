@@ -19,7 +19,6 @@ import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.Hopper;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
@@ -52,7 +51,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private boolean externalOutput;
     private boolean initialized;
     private BlockState[] pendingGrid;
-    private long lastHash;
     /** Cached view of the boundary-layer container slots, rebuilt each game tick. */
     private List<SlotRef> boundarySlots = List.of();
     private long boundaryBuiltAt = Long.MIN_VALUE;
@@ -124,6 +122,11 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             } else {
                 removeForeignBlocks(space);
             }
+            // The board floor sits one layer below the grid (relativeY -1), so it neither consumes
+            // a cell of the usable 16x16x16 volume nor is ever swept by clear/removeForeignBlocks
+            // (those only walk grid cells). Idempotent, so re-ensuring on reload is harmless and
+            // old saves without a floor get one.
+            space.ensureFloor();
         }
         if (pendingGrid != null) {
             GridSerializer.apply(pendingGrid, new BoardSpace(pcbLevel, boardChunk, BoardChunks.baseY(pcbLevel)));
@@ -217,28 +220,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
 
     public byte[] snapshotBytes() {
         return GridSerializer.write(grid());
-    }
-
-    public long regionHash() {
-        ensureRegion();
-        BoardSpace space = space();
-        if (space == null) {
-            return 0L;
-        }
-        long hash = 1;
-        for (int i = 0; i < GridSerializer.COUNT; i++) {
-            hash = hash * 31 + Block.getId(space.get(i));
-        }
-        return hash;
-    }
-
-    public boolean hasChangedSinceLastSync() {
-        long hash = regionHash();
-        if (hash == lastHash) {
-            return false;
-        }
-        lastHash = hash;
-        return true;
     }
 
     // --- flags ------------------------------------------------------------------------------------

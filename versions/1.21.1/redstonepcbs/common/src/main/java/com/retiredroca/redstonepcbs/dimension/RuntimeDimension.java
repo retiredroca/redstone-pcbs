@@ -2,6 +2,7 @@ package com.retiredroca.redstonepcbs.dimension;
 
 import com.mojang.serialization.MapCodec;
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.block.BoardChunks;
 
 import net.minecraft.core.Holder;
 import net.minecraft.core.RegistrationInfo;
@@ -59,6 +60,12 @@ public final class RuntimeDimension {
     public static ServerLevel ensure(MinecraftServer server, Access access) {
         ServerLevel existing = server.getLevel(PcbDimension.LEVEL_KEY);
         if (existing != null) {
+            // Ensure the ticket + forced-chunk pair is live on every start, not just at allocation.
+            // restore() re-issues the region ticket (block/entity ticking) and re-forces the chunk
+            // (keeps ServerLevel's keep-alive flag true so hoppers/containers tick forever, no player
+            // ever needs to be in the board dimension). Without this the board loads but block entities
+            // only tick inside the 300-tick (15 s) empty-time grace, then stop.
+            BoardChunks.get(existing);
             return existing;
         }
 
@@ -83,6 +90,7 @@ public final class RuntimeDimension {
 
         ServerLevel level = access.createAndRegisterLevel(server, PcbDimension.LEVEL_KEY, stem);
         if (level != null) {
+            BoardChunks.get(level);
             LOGGER.info("PCB: created board dimension {} ({}..{}), base Y {}",
                     PcbDimension.ID, PcbDimension.MIN_Y, PcbDimension.MIN_Y + PcbDimension.HEIGHT,
                     PcbDimension.BOARD_BASE_Y);
