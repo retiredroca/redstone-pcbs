@@ -45,6 +45,9 @@ oc.sh
 # Local release notes (machine-local)
 release-guide.txt
 
+# Local listing copy (machine-local, pasted into the CurseForge page by hand)
+CURSEFORGE.md
+
 # Agent notes (local only)
 AGENTS.md
 agents.md
