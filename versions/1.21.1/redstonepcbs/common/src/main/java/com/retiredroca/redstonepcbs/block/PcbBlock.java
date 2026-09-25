@@ -107,8 +107,15 @@ public class PcbBlock extends Block implements EntityBlock {
         super.setPlacedBy(level, pos, state, placer, stack);
         if (!level.isClientSide && level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
             ChipData data = stack.get(RedstonePcbs.platform().chip());
-            if (data != null && data.data().length > 0) {
-                be.setGrid(GridSerializer.read(data.data(), level.holderLookup(Registries.BLOCK)));
+            if (data != null) {
+                byte[] grid = data.grid();
+                if (grid.length > 0) {
+                    be.setGrid(GridSerializer.read(grid, level.holderLookup(Registries.BLOCK)));
+                }
+                byte[] faces = data.faces();
+                if (faces.length > 0) {
+                    be.setAttachFaces(PcbAttach.decode(faces));
+                }
             }
             be.ensureRegionNow();
         }
@@ -119,7 +126,8 @@ public class PcbBlock extends Block implements EntityBlock {
             @Nullable BlockEntity blockEntity, ItemStack tool) {
         if (!level.isClientSide && blockEntity instanceof PcbBlockEntity be) {
             ItemStack drop = new ItemStack(RedstonePcbs.platform().pcbItem());
-            drop.set(RedstonePcbs.platform().chip(), new ChipData(be.snapshotBytes()));
+            drop.set(RedstonePcbs.platform().chip(),
+                    new ChipData(ChipData.pack(be.attachBytes(), be.snapshotBytes())));
             Block.popResource(level, pos, drop);
             be.releaseRegion();
         }

@@ -5,6 +5,7 @@ import com.retiredroca.redstonepcbs.block.BoardEdit;
 import com.retiredroca.redstonepcbs.block.BoardSpace;
 import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
+import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
@@ -28,7 +29,9 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Server-side handling for editor edits and the saved-designs library. Edits read the board's region
@@ -46,8 +49,8 @@ public final class ModNetwork {
         }
         RedstonePcbs.platform().sendToPlayer(player,
                 new S2COpenEditorPayload(C2SEditPayload.KIND_ITEM, BlockPos.ZERO, slot, Dir.UP.ordinal()));
-        RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.item(slot, GridSerializer.write(readGrid(player, stack))));
+        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.item(slot,
+                GridSerializer.write(readGrid(player, stack)), readFaces(stack)));
     }
 
     public static void handleEdit(ServerPlayer player, C2SEditPayload payload) {
@@ -83,6 +86,11 @@ public final class ModNetwork {
                 sendBlockSnapshot(player, payload.pos(), be);
                 return;
             }
+            case C2SEditPayload.ACTION_SET_FACE -> {
+                setFace(be, payload);
+                sendBlockSnapshot(player, payload.pos(), be);
+                return;
+            }
             default -> {
             }
         }
@@ -90,6 +98,14 @@ public final class ModNetwork {
         if (apply(player, grid, payload)) {
             be.setGrid(grid);
             be.onEdited();
+            // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
+            switch (payload.action()) {
+                case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
+                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE ->
+                        be.clearAttachFace(payload.index());
+                default -> {
+                }
+            }
         }
         sendBlockSnapshot(player, payload.pos(), be);
     }
@@ -100,16 +116,34 @@ public final class ModNetwork {
             return;
         }
         if (payload.action() == C2SEditPayload.ACTION_REQUEST) {
-            sendItemSnapshot(player, payload.slot(), readGrid(player, stack));
+            sendItemSnapshot(player, payload.slot(), readGrid(player, stack), readFaces(stack));
             return;
         }
         BlockState[] grid = readGrid(player, stack);
-        if (apply(player, grid, payload)) {
-            stack.set(RedstonePcbs.platform().chip(), new ChipData(GridSerializer.write(grid)));
-            player.getInventory().setChanged();
-            player.inventoryMenu.broadcastChanges();
+        Map<Integer, Dir> faces = new LinkedHashMap<>(PcbAttach.decode(readFaces(stack)));
+        if (payload.action() == C2SEditPayload.ACTION_SET_FACE) {
+            applyFace(faces, payload);
+        } else if (apply(player, grid, payload)) {
+            // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
+            switch (payload.action()) {
+                case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
+                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE ->
+                        faces.remove(payload.index());
+                default -> {
+                }
+            }
         }
-        sendItemSnapshot(player, payload.slot(), grid);
+        stack.set(RedstonePcbs.platform().chip(),
+                new ChipData(ChipData.pack(PcbAttach.encode(faces), GridSerializer.write(grid))));
+        player.getInventory().setChanged();
+        player.inventoryMenu.broadcastChanges();
+        sendItemSnapshot(player, payload.slot(), grid, PcbAttach.encode(faces));
+    }
+
+    /** The gateway attachment bytes carried by a PCB item (empty when none). */
+    public static byte[] readFaces(ItemStack stack) {
+        ChipData data = stack.get(RedstonePcbs.platform().chip());
+        return data == null ? PcbAttach.EMPTY : data.faces();
     }
 
     private static void openUi(ServerPlayer player, PcbBlockEntity be, int index) {
@@ -124,12 +158,59 @@ public final class ModNetwork {
     }
 
     private static void sendBlockSnapshot(ServerPlayer player, BlockPos pos, PcbBlockEntity be) {
-        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.block(pos, be.snapshotBytes()));
+        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.block(pos, be.snapshotBytes(), be.attachBytes()));
     }
 
     private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid) {
+        sendItemSnapshot(player, slot, grid, PcbAttach.EMPTY);
+    }
+
+    private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid, byte[] faces) {
         RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.item(slot, GridSerializer.write(grid)));
+                S2CSnapshotPayload.item(slot, GridSerializer.write(grid), faces));
+    }
+
+    /**
+     * Assigns or clears the gateway face of a placed board's container at {@code index}. A face can
+     * only be held by one cell, so {@link PcbBlockEntity#setAttachFace} clears any previous owner
+     * before taking it, matching the item path.
+     */
+    private static void setFace(PcbBlockEntity be, C2SEditPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= GridSerializer.COUNT) {
+            return;
+        }
+        int packed = payload.packed() & 0xFF;
+        if (packed == 0xFF) {
+            be.setAttachFace(index, null);
+            return;
+        }
+        if (packed >= Dir.VALUES.length) {
+            return;
+        }
+        be.setAttachFace(index, Dir.byOrdinal(packed));
+    }
+
+    /**
+     * Applies an {@code ACTION_SET_FACE} to a portable board's attachment map: a face belongs to one
+     * cell, so any previous owner is cleared first; 0xFF clears the cell's face.
+     */
+    private static void applyFace(Map<Integer, Dir> faces, C2SEditPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= GridSerializer.COUNT) {
+            return;
+        }
+        int packed = payload.packed() & 0xFF;
+        if (packed == 0xFF) {
+            faces.remove(index);
+            return;
+        }
+        if (packed >= Dir.VALUES.length) {
+            return;
+        }
+        Dir face = Dir.byOrdinal(packed);
+        faces.values().removeIf(f -> f == face);
+        faces.put(index, face);
     }
 
     // --- edit application -------------------------------------------------------------------------
@@ -273,8 +354,9 @@ public final class ModNetwork {
 
     public static BlockState[] readGrid(ServerPlayer player, ItemStack stack) {
         ChipData data = stack.get(RedstonePcbs.platform().chip());
-        return data != null && data.data().length > 0
-                ? GridSerializer.read(data.data(), player.level().holderLookup(Registries.BLOCK))
+        byte[] grid = data == null ? new byte[0] : data.grid();
+        return grid.length > 0
+                ? GridSerializer.read(grid, player.level().holderLookup(Registries.BLOCK))
                 : GridSerializer.emptyGrid();
     }
 

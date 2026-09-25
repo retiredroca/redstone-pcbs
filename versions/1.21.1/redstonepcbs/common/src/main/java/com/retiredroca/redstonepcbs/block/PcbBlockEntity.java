@@ -57,6 +57,8 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private final int[] lastFaceCount = {-1, -1, -1, -1, -1, -1};
     /** Hopper-style transfer cooldown, in game ticks. */
     private int cooldownTime;
+    /** Gateway attachments: grid cell index -> the PCB face it is exposed on. */
+    private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
 
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("redstonepcbs");
 
@@ -222,7 +224,8 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
 
     public void sendEditorTo(ServerPlayer player, Dir face) {
         RedstonePcbs.platform().sendToPlayer(player, S2COpenEditorPayload.block(worldPosition, face.ordinal()));
-        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.block(worldPosition, snapshotBytes()));
+        RedstonePcbs.platform().sendToPlayer(player,
+                S2CSnapshotPayload.block(worldPosition, snapshotBytes(), attachBytes()));
     }
 
     public void onEdited() {
@@ -308,12 +311,27 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         }
 
         List<SlotRef> list = new ArrayList<>();
-        for (Dir face : Dir.VALUES) {
-            Direction direction = Directions.toMinecraft(face);
-            for (Cell c : edgePorts(space, cells, face)) {
-                for (int slot : slotsFor(direction, c.container())) {
-                    list.add(new SlotRef(face, c.container(), slot));
+        for (Map.Entry<Integer, Dir> e : attachFaces.entrySet()) {
+            int index = e.getKey();
+            if (index < 0 || index >= GridSerializer.COUNT) {
+                continue;
+            }
+            int cx = BoardSpace.xOf(index);
+            int cy = BoardSpace.yOf(index);
+            int cz = BoardSpace.zOf(index);
+            Cell cell = null;
+            for (Cell c : cells) {
+                if (c.x() == cx && c.y() == cy && c.z() == cz) {
+                    cell = c;
+                    break;
                 }
+            }
+            if (cell == null) {
+                continue;
+            }
+            Direction direction = Directions.toMinecraft(e.getValue());
+            for (int slot : slotsFor(direction, cell.container())) {
+                list.add(new SlotRef(e.getValue(), cell.container(), slot));
             }
         }
         if (list.size() != boundarySlots.size()) {
@@ -321,70 +339,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
                     worldPosition, list.size(), cells.size());
         }
         boundarySlots = list;
-    }
-
-    /**
-     * The containers reachable from {@code face}, nearest the face first. A container is reachable
-     * only when every cell between it and that face's edge layer is air: a solid (or any other) part
-     * placed on the edge layer shields everything behind it, exactly like solid-block item transport
-     * in the world. Because a reachable container is itself non-air, only the nearest container on a
-     * given line can ever qualify, so no per-line dedupe is needed.
-     */
-    private static List<Cell> edgePorts(BoardSpace space, List<Cell> cells, Dir face) {
-        List<Cell> ports = new ArrayList<>();
-        for (Cell c : cells) {
-            int depth = switch (face) {
-                case DOWN -> c.y();
-                case UP -> SIZE - 1 - c.y();
-                case NORTH -> c.z();
-                case SOUTH -> SIZE - 1 - c.z();
-                case WEST -> c.x();
-                case EAST -> SIZE - 1 - c.x();
-            };
-            boolean clear = true;
-            for (int d = 0; d < depth && clear; d++) {
-                int x;
-                int y;
-                int z;
-                switch (face) {
-                    case DOWN -> {
-                        x = c.x();
-                        y = d;
-                        z = c.z();
-                    }
-                    case UP -> {
-                        x = c.x();
-                        y = SIZE - 1 - d;
-                        z = c.z();
-                    }
-                    case NORTH -> {
-                        x = c.x();
-                        y = c.y();
-                        z = d;
-                    }
-                    case SOUTH -> {
-                        x = c.x();
-                        y = c.y();
-                        z = SIZE - 1 - d;
-                    }
-                    case WEST -> {
-                        x = d;
-                        y = c.y();
-                        z = c.z();
-                    }
-                    default -> {
-                        x = SIZE - 1 - d;
-                        y = c.y();
-                        z = c.z();
-                    }
-                }
-                clear = space.get(x, y, z).isAir();
-            }
-            if (clear) {
-                ports.add(c);
-            }
-        }
-        return ports;
     }
 
     /**
@@ -530,6 +484,76 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
                 || worldly.canTakeItemThroughFace(ref.slot(), stack, direction);
     }
 
+    // --- gateway attachments ----------------------------------------------------------------------
+
+    /** The face each attached cell is exposed on (cell index -> face). */
+    public java.util.Map<Integer, Dir> attachFaces() {
+        return java.util.Collections.unmodifiableMap(attachFaces);
+    }
+
+    /** The face cell {@code index} is attached to, or {@code null}. */
+    @Nullable
+    public Dir attachFace(int index) {
+        return attachFaces.get(index);
+    }
+
+    /** The cell currently owning {@code face}, or -1. */
+    public int cellForFace(Dir face) {
+        for (Map.Entry<Integer, Dir> e : attachFaces.entrySet()) {
+            if (e.getValue() == face) {
+                return e.getKey();
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Attaches {@code index} to {@code face}, or clears it when {@code face} is null. A face can only
+     * be held by one cell, so any previous owner is cleared first. The boundary ports are rebuilt next
+     * tick and the client is sent a fresh snapshot by the caller.
+     */
+    public void setAttachFace(int index, @Nullable Dir face) {
+        if (face == null) {
+            attachFaces.remove(index);
+        } else {
+            int owner = cellForFace(face);
+            if (owner >= 0 && owner != index) {
+                attachFaces.remove(owner);
+            }
+            attachFaces.put(index, face);
+        }
+        setChanged();
+    }
+
+    /**
+     * Replaces every attachment with {@code faces}, used when a portable board is placed from its item.
+     * Out-of-range cell indices are dropped, and a face claimed by more than one cell is left with its
+     * last claimant.
+     */
+    public void setAttachFaces(java.util.Map<Integer, Dir> faces) {
+        attachFaces.clear();
+        for (Map.Entry<Integer, Dir> e : faces.entrySet()) {
+            int index = e.getKey();
+            if (index < 0 || index >= GridSerializer.COUNT || e.getValue() == null) {
+                continue;
+            }
+            attachFaces.put(index, e.getValue());
+        }
+        setChanged();
+    }
+
+    /** Drops any attachment for {@code index} (used when the cell is cleared or replaced). */
+    public void clearAttachFace(int index) {
+        if (attachFaces.remove(index) != null) {
+            setChanged();
+        }
+    }
+
+    /** The attachment bytes for the snapshot payload. */
+    public byte[] attachBytes() {
+        return PcbAttach.encode(attachFaces);
+    }
+
     // --- persistence ------------------------------------------------------------------------------
 
     @Override
@@ -541,6 +565,9 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         }
         tag.putBoolean("input", externalInput);
         tag.putBoolean("output", externalOutput);
+        if (!attachFaces.isEmpty()) {
+            tag.putByteArray("attach", attachBytes());
+        }
     }
 
     @Override
@@ -549,6 +576,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         boardChunk = tag.contains("chunkX") ? new ChunkPos(tag.getInt("chunkX"), tag.getInt("chunkZ")) : null;
         externalInput = tag.getBoolean("input");
         externalOutput = tag.getBoolean("output");
+        attachFaces.clear();
+        if (tag.contains("attach")) {
+            attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));
+        }
     }
 
     @Override

@@ -21,7 +21,7 @@ public final class ClientEditorNetwork implements ClientPacketSink.Handler {
     @Override
     public void snapshot(S2CSnapshotPayload payload) {
         if (Minecraft.getInstance().screen instanceof PcbEditorScreen screen && screen.matches(payload)) {
-            screen.acceptSnapshot(payload.data());
+            screen.acceptSnapshot(payload.data(), payload.faces());
         }
     }
 

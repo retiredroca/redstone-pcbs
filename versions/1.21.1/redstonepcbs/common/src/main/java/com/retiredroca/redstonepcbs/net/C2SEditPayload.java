@@ -33,6 +33,8 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static final int ACTION_TOGGLE_OUTPUT = 14;
     /** Place an arbitrary item: {@code text} is the item registry id, {@code packed} packs the facing. */
     public static final int ACTION_PLACE = 15;
+    /** Assign/clear a gateway face: {@code index} is the cell, the packed low byte is the face or 0xFF. */
+    public static final int ACTION_SET_FACE = 16;
 
     public static final int FLAG_SUBTRACT = 1;
 
@@ -86,6 +88,16 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static C2SEditPayload placeItem(int slot, int index, String itemId, int facing, int flags) {
         return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_PLACE, index,
                 (facing & 0xFF) << 8 | (flags & 0xFF) << 16, itemId);
+    }
+
+    /** Face action: {@code index} is the cell, the packed low byte is the target face ordinal (0xFF = none). */
+    public static C2SEditPayload face(BlockPos pos, int index, int face) {
+        return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_SET_FACE, index, face & 0xFF, "");
+    }
+
+    /** Face action for a portable board item. */
+    public static C2SEditPayload faceItem(int slot, int index, int face) {
+        return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_SET_FACE, index, face & 0xFF, "");
     }
 
     public int part() {

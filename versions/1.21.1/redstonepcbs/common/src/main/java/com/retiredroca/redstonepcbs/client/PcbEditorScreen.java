@@ -9,6 +9,7 @@ import com.retiredroca.redstonepcbs.block.BoardEdit;
 import com.retiredroca.redstonepcbs.block.BoardSpace;
 import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
+import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
@@ -83,6 +84,8 @@ public class PcbEditorScreen extends Screen {
     private final int slot;
 
     private BlockState[] local = GridSerializer.emptyGrid();
+    /** Gateway attachments mirrored from the server: grid cell index -> PCB face. */
+    private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
     private boolean inputOn;
     private boolean outputOn;
     /** The part the selected palette entry corresponds to, or AIR for an arbitrary block item. */
@@ -187,8 +190,10 @@ public class PcbEditorScreen extends Screen {
         return kind == C2SEditPayload.KIND_ITEM ? payload.slot() == slot : payload.pos().equals(pos);
     }
 
-    public void acceptSnapshot(byte[] data) {
+    public void acceptSnapshot(byte[] data, byte[] faces) {
         local = GridSerializer.read(data, blockLookup());
+        attachFaces.clear();
+        attachFaces.putAll(PcbAttach.decode(faces));
     }
 
     private HolderGetter<Block> blockLookup() {
@@ -392,6 +397,20 @@ public class PcbEditorScreen extends Screen {
         drawBoxWireframe(graphics, mvp, 0, 0, 0, GRID, GRID, GRID, 0x60FFFFFF);
         // Highlight the active layer so the layer selection has a visible purpose.
         drawBoxWireframe(graphics, mvp, 0, activeLayer, 0, GRID, activeLayer + 1, GRID, 0x9000E0FF);
+        // Highlight each attached PCB face in a single neutral colour (the gateway is attachment-only;
+        // the in-board container's own face rules decide insert/extract, not the PCB face).
+        int nudge = 1;
+        for (Dir face : attachFaces.values()) {
+            int color = 0xC060C0FF;
+            switch (face) {
+                case DOWN -> drawBoxWireframe(graphics, mvp, 0, -nudge, 0, GRID, 0, GRID, color);
+                case UP -> drawBoxWireframe(graphics, mvp, 0, GRID, 0, GRID, GRID + nudge, GRID, color);
+                case NORTH -> drawBoxWireframe(graphics, mvp, 0, 0, -nudge, GRID, GRID, 0, color);
+                case SOUTH -> drawBoxWireframe(graphics, mvp, 0, 0, GRID, GRID, GRID, GRID + nudge, color);
+                case WEST -> drawBoxWireframe(graphics, mvp, -nudge, 0, 0, 0, GRID, GRID, color);
+                case EAST -> drawBoxWireframe(graphics, mvp, GRID, 0, 0, GRID + nudge, GRID, GRID, color);
+            }
+        }
 
         // Axis gizmo: constant GUI size, directions taken from the camera rotation, with labels.
         float ox = gridX + 22;
@@ -775,7 +794,7 @@ public class PcbEditorScreen extends Screen {
 
     private void sendPlace(int index, String itemId, Dir facing) {
         RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
-                ? C2SEditPayload.placeItem(cell, index, itemId, facing.ordinal(), 0)
+                ? C2SEditPayload.placeItem(slot, index, itemId, facing.ordinal(), 0)
                 : C2SEditPayload.place(pos, index, itemId, facing.ordinal(), 0));
     }
 
@@ -1027,6 +1046,12 @@ public class PcbEditorScreen extends Screen {
                 }
                 return true;
             }
+            case 71 -> { // G: cycle the hovered container's gateway face
+                if (index >= 0 && isContainerCell(index)) {
+                    cycleAttachFace(index);
+                }
+                return true;
+            }
             case 265, 264, 263, 262 -> { // arrow keys: no-op (pan is Ctrl/Alt + drag)
                 return true;
             }
@@ -1049,6 +1074,57 @@ public class PcbEditorScreen extends Screen {
             case DOWN -> Dir.UP;
             case UP -> Dir.DOWN;
         };
+    }
+
+    /**
+     * Cycles the hovered cell's gateway face: none -> each face not already held by another cell ->
+     * none. The server validates the choice and echoes a fresh snapshot.
+     */
+    private void cycleAttachFace(int index) {
+        Dir current = attachFaces.get(index);
+        // Faces this cell may take: every face except the current one and those held elsewhere.
+        List<Dir> free = new ArrayList<>();
+        for (Dir face : Dir.VALUES) {
+            if (face == current) {
+                continue;
+            }
+            boolean taken = attachFaces.entrySet().stream()
+                    .anyMatch(e -> e.getKey() != index && e.getValue() == face);
+            if (!taken) {
+                free.add(face);
+            }
+        }
+        Dir next;
+        if (free.isEmpty()) {
+            next = null;
+        } else if (current == null) {
+            next = free.get(0);
+        } else {
+            // The first free face after the current in DIR order; wrap to none when there is none.
+            int currentOrdinal = current.ordinal();
+            next = free.stream().filter(f -> f.ordinal() > currentOrdinal).findFirst().orElse(null);
+        }
+        sendFace(index, next);
+        if (next == null) {
+            attachFaces.remove(index);
+        } else {
+            attachFaces.put(index, next);
+        }
+    }
+
+    private void sendFace(int index, Dir face) {
+        int packed = face == null ? 0xFF : face.ordinal();
+        RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
+                ? C2SEditPayload.faceItem(slot, index, packed)
+                : C2SEditPayload.face(pos, index, packed));
+    }
+
+    /** Whether the editor's local grid copy has a container in the cell (only these can be attached). */
+    private boolean isContainerCell(int index) {
+        if (index < 0 || index >= local.length) {
+            return false;
+        }
+        return BoardStates.partOf(local[index]).isContainer();
     }
 
     private void selectEntry(PcbIcons.Entry entry) {
@@ -1248,8 +1324,8 @@ public class PcbEditorScreen extends Screen {
         });
         y += rowH + 4;
 
-        graphics.drawString(this.font, "L: place  Shift+L: erase", px, y, 0x9F9F9F, false);
-        graphics.drawString(this.font, "R: interact/rotate", px, y + 10, 0x9F9F9F, false);
+        graphics.drawString(this.font, "L: place  Shift+L: erase  R-click: use", px, y, 0x9F9F9F, false);
+        graphics.drawString(this.font, "R: rotate  G: gateway face", px, y + 10, 0x9F9F9F, false);
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
@@ -1497,6 +1573,10 @@ public class PcbEditorScreen extends Screen {
             } else if (state.is(Blocks.REDSTONE_WIRE)) {
                 lines.add(Component.literal("power "
                         + state.getValue(net.minecraft.world.level.block.RedStoneWireBlock.POWER)));
+            }
+            Dir attach = attachFaces.get(index);
+            if (attach != null) {
+                lines.add(Component.literal("gateway: " + attach.name().toLowerCase(java.util.Locale.ROOT)));
             }
             return join(lines);
         }

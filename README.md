@@ -15,7 +15,7 @@ save-persistent redstone board inside a single block.
   a container/hopper UI), and `R` rotates the hovered block (or the pending facing). The view presets
   are two rows (NE/SE/SW/NW/Top, N/E/S/W) and a Reset button recentres the view. The active layer is
   outlined, and **Pulse Layer** toggles every lever and presses every button on that layer. The palette
-  is a creative-style 9x3 icon grid with tabs and search.
+  is a creative-style 9x3 icon grid with tabs and search. `G` assigns a container's gateway face.
 - **Vanilla redstone** - the board's circuit is a real 16x16x16 region of a hidden board dimension,
   so Minecraft itself runs the redstone: signal strength, dust shapes, torch/repeater/comparator/observer
   timings, hopper locks, quasi-connectivity and all. The board dimension is an empty, void world
@@ -43,23 +43,25 @@ save-persistent redstone board inside a single block.
   items exactly like the world block, and comparators read it natively.
 - **Hoppers** - real vanilla hoppers with their 5-slot UI. Filtering is the vanilla technique: lock the
   hopper with a redstone signal, put the 41 + 4 reference items in, and read it with a comparator.
-- **Item gateway** - the board exchanges items with world hoppers through the PCB block. Each face
-  maps to the in-board containers reachable from that face, one port per grid line. The port is the
-  **closest non-air cell** walking inwards from the face's edge layer over air only: if that cell is a
-  container it is exposed, and if it is any other block the line is blocked. So a solid part placed
-  against a face shields whatever sits behind it, exactly like solid-block item transport in the
-  world - place or remove a part on an edge layer to block or unblock a face port.
-  - **Bottom** - an in-world hopper attached under the PCB pulls from the container on the board's
-    lowest layer `y=0` when that cell is air-adjacent to the face.
-  - **Top** - the block above the PCB may be air or a container (hopper, chest, furnace, blast
-    furnace, smoker, brewer); the board pulls down from it, so a hopper chain passing over the top
-    feeds the board.
-  - **Sides** - receive only, and only from a hopper directly attached to that side.
+- **Item gateway** - the board exchanges items with world hoppers through the PCB block. The gateway
+  is **manual**: hover an in-board **container** (a block with inventory slots) in the editor and press
+  `G` to assign it to a PCB face; press `G` again to step to the next free face, and once more past the
+  last face to clear it. A face can be held by only one container and a container by only one face;
+  the editor only offers faces that are still free, so clear one before moving another container onto
+  it. The assigned PCB face is highlighted in the 3D view while attached. A container with no assigned
+  face is **not reachable** from the world at all. Non-containers cannot be assigned.
+  - **Bottom** - an in-world hopper attached under the PCB pulls from the assigned container.
+  - **Top** - the block above the PCB may be a container; the board pulls down from it.
+  - **Sides** - feed the assigned container from a hopper attached to that side.
   Slots and direction checks are delegated to the in-board container's own vanilla rules, so a furnace
-  or brewing stand keeps its real face restrictions, while a plain hopper exposes all five slots as it
-  does in the world. Items crossing the gateway also notify the in-board container, so comparators and
-  neighbours reading it update in the board dimension on both loaders. This is **items only** -
-  world-facing **redstone** in/out is not wired yet (the Signal toggles are placeholders).
+  or brewing stand keeps its real face restrictions (e.g. a furnace's top accepts smeltables and its
+  sides fuel), while a plain hopper exposes all five slots as it does in the world. The PCB face only
+  decides *whether* the container is reachable, not which of its slots accepts or yields a transfer.
+  Placing, clearing or rotating a cell clears its attachment (rotate it, then re-press `G`). Items
+  crossing the gateway also notify the in-board container, so comparators and neighbours reading it
+  update in the board dimension on both loaders. Attachments persist on the block and travel with the
+  PCB item when it is carried. This is **items only** - world-facing **redstone** in/out is not wired
+  yet (the Signal toggles are placeholders).
 
 The board is a real-block sandbox: any block item can be placed, not just the classic redstone set
 (redstone, torch, repeater, comparator, block of redstone, lever, button, stone, glass, lamp,
