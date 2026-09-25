@@ -82,8 +82,6 @@ public class PcbEditorScreen extends Screen {
     private BlockState[] local = GridSerializer.emptyGrid();
     /** Gateway attachments mirrored from the server: grid cell index -> PCB face. */
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
-    private boolean inputOn;
-    private boolean outputOn;
     /** The part the selected palette entry corresponds to, or AIR for an arbitrary block item. */
     private Part selected = Part.DUST;
     private PcbIcons.Entry selectedEntry;
@@ -1344,20 +1342,6 @@ public class PcbEditorScreen extends Screen {
                 }
             }
         });
-        y += rowH + 3;
-
-        // Signal inputs and the library, side by side.
-        int half = (panelW - 2) / 2;
-        addButton(graphics, px, y, half, rowH, inputOn ? "Redstone Input: On" : "Redstone Input: Off",
-                () -> {
-                    send(C2SEditPayload.ACTION_TOGGLE_INPUT, 0, null, null, false);
-                    inputOn = !inputOn;
-                });
-        addButton(graphics, px + half + 2, y, panelW - half - 2, rowH,
-                outputOn ? "Redstone Output: On" : "Redstone Output: Off", () -> {
-                    send(C2SEditPayload.ACTION_TOGGLE_OUTPUT, 0, null, null, false);
-                    outputOn = !outputOn;
-                });
         y += rowH + 3;
 
         addButton(graphics, px, y, panelW, rowH, "Library", () -> {

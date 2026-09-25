@@ -46,8 +46,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
 
     private ChunkPos boardChunk;
     private boolean regionCleaned;
-    private boolean externalInput;
-    private boolean externalOutput;
     private boolean initialized;
     private BlockState[] pendingGrid;
     /** The slots this board exposes to the world, rebuilt at most once per game tick. */
@@ -136,12 +134,9 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         ensureBoundarySlots();
         if (!initialized) {
             initialized = true;
-            // Old saves may carry stale board power / locked neighbours from earlier builds.
-            BlockState state = getBlockState();
-            if (state.hasProperty(PcbBlock.POWER) && state.getValue(PcbBlock.POWER) != 0) {
-                level.setBlock(worldPosition, state.setValue(PcbBlock.POWER, 0), 3);
-            }
-            level.updateNeighborsAt(worldPosition, state.getBlock());
+            // Old saves may carry locked neighbours from earlier builds; re-notify so adjacent
+            // hoppers re-evaluate their lock state against this board's gateway.
+            level.updateNeighborsAt(worldPosition, getBlockState().getBlock());
         }
         if (cooldownTime < MOVE_COOLDOWN) {
             cooldownTime++;
@@ -199,26 +194,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
 
     public byte[] snapshotBytes() {
         return GridSerializer.write(grid());
-    }
-
-    // --- flags ------------------------------------------------------------------------------------
-
-    public boolean isExternalInput() {
-        return externalInput;
-    }
-
-    public void setExternalInput(boolean value) {
-        externalInput = value;
-        setChanged();
-    }
-
-    public boolean isExternalOutput() {
-        return externalOutput;
-    }
-
-    public void setExternalOutput(boolean value) {
-        externalOutput = value;
-        setChanged();
     }
 
     // --- lifecycle --------------------------------------------------------------------------------
@@ -569,8 +544,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             tag.putInt("chunkX", boardChunk.x);
             tag.putInt("chunkZ", boardChunk.z);
         }
-        tag.putBoolean("input", externalInput);
-        tag.putBoolean("output", externalOutput);
         if (!attachFaces.isEmpty()) {
             tag.putByteArray("attach", attachBytes());
         }
@@ -580,8 +553,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
         boardChunk = tag.contains("chunkX") ? new ChunkPos(tag.getInt("chunkX"), tag.getInt("chunkZ")) : null;
-        externalInput = tag.getBoolean("input");
-        externalOutput = tag.getBoolean("output");
         attachFaces.clear();
         if (tag.contains("attach")) {
             attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));

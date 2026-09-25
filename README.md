@@ -23,8 +23,17 @@ save-persistent redstone board inside a single block.
   ticking so redstone runs with no player nearby, and the border chunks are held loaded without
   ticking. Breaking a board packs the region back into the PCB item; placing it writes it back.
   The dimension's height is a code parameter, so taller boards can be enabled later.
-- **Signal section** - the editor shows **Input** and **Output** switches (both off by default). The
-  board's redstone is currently self-contained; world-facing redstone I/O is not wired yet.
+- **Redstone in and out** - the PCB block itself neither emits nor receives redstone; the board's
+  circuit is self-contained. Nothing in the editor bridges a signal, because vanilla has no way to
+  write a signal level into a real-block region: a level only *emerges* from a container being read
+  by a comparator, so the way to carry a signal across the boundary is to move **items** through the
+  gateway and let a vanilla comparator turn the container's fill into a level on the far side. In
+  practice that means a container inside the board filled from outside (world hoppers push in through
+  the top and side faces) with a comparator on it, and the reverse for the way out.
+
+  > **Untested.** The obvious build for this - a half hopper clock on each side, feeding and draining
+  > containers across the gateway to steer the level - has not been built or tested. Treat it as a
+  > starting point to try, not a documented design.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
   world). A design's name is typed in the panel's name field; "Save" costs one paper in survival, and
   loading a design back onto a board consumes the matching items in survival. The per-player limit is
@@ -54,8 +63,8 @@ save-persistent redstone board inside a single block.
   yields a transfer. Placing, clearing or rotating a cell clears its attachment (rotate it, then
   re-press `G`). Items crossing the gateway also notify the in-board container, so comparators and
   neighbours reading it update in the board dimension on both loaders. Attachments persist on the
-  block and travel with the PCB item when it is carried. This is **items only** - world-facing
-  **redstone** in/out is not wired yet (the Signal toggles are placeholders).
+  block and travel with the PCB item when it is carried. This is **items only** - the PCB block carries
+  no redstone itself, so see *Redstone in and out* above for the item-based workaround.
 
 The board is a real-block sandbox: any block item can be placed, not just the classic redstone set
 (redstone, torch, repeater, comparator, block of redstone, lever, button, stone, glass, lamp,

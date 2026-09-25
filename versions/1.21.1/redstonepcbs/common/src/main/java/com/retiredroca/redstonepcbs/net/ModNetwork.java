@@ -73,14 +73,6 @@ public final class ModNetwork {
                 openUi(player, be, payload.index());
                 return;
             }
-            case C2SEditPayload.ACTION_TOGGLE_INPUT -> {
-                be.setExternalInput(!be.isExternalInput());
-                return;
-            }
-            case C2SEditPayload.ACTION_TOGGLE_OUTPUT -> {
-                be.setExternalOutput(!be.isExternalOutput());
-                return;
-            }
             case C2SEditPayload.ACTION_REQUEST -> {
                 sendBlockSnapshot(player, payload.pos(), be);
                 return;

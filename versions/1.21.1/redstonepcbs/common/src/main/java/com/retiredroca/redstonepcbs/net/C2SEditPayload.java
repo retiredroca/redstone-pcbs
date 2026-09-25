@@ -26,8 +26,6 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static final int ACTION_REQUEST = 7;
     public static final int ACTION_OPEN_UI = 11;
     public static final int ACTION_PULSE_LAYER = 12;
-    public static final int ACTION_TOGGLE_INPUT = 13;
-    public static final int ACTION_TOGGLE_OUTPUT = 14;
     /** Place an arbitrary item: {@code text} is the item registry id, {@code packed} packs the facing. */
     public static final int ACTION_PLACE = 15;
     /** Assign/clear a gateway face: {@code index} is the cell, the packed low byte is the face or 0xFF. */

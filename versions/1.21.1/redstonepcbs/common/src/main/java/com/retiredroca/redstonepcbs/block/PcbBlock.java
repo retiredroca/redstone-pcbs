@@ -21,29 +21,15 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.StateDefinition;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 import org.jetbrains.annotations.Nullable;
 
 /** PCB interface block: right-click opens the editor, and it owns a board region in the board dimension. */
 public class PcbBlock extends Block implements EntityBlock {
-    /**
-     * World-facing power level. Reserved for a future world-facing redstone bridge; both signal getters
-     * return 0 today because the board's redstone lives in its region, not in this block.
-     */
-    public static final IntegerProperty POWER = BlockStateProperties.POWER;
 
     public PcbBlock(Properties properties) {
         super(properties);
-        registerDefaultState(stateDefinition.any().setValue(POWER, 0));
-    }
-
-    @Override
-    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(POWER);
     }
 
     public static Properties boardProperties() {
@@ -135,9 +121,13 @@ public class PcbBlock extends Block implements EntityBlock {
         }
     }
 
+    /**
+     * The PCB block neither emits nor receives redstone: the board's circuit is self-contained. To
+     * move a signal across the boundary, move items through the item gateway instead and let a
+     * vanilla comparator turn the container's fill into a level on the other side.
+     */
     @Override
     public int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        // World-facing redstone is not wired yet; the board's circuit is self-contained.
         return 0;
     }
 
