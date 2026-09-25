@@ -125,7 +125,7 @@ public class PcbEditorScreen extends Screen {
     private final java.util.Map<Item, Integer> itemCounts = new java.util.HashMap<>();
 
     // palette tabs + search
-    private PcbIcons.Tab activeTab = PcbIcons.Tab.REDSTONE;
+    private PcbIcons.Tab activeTab = PcbIcons.Tab.SEARCH;
     private String search = "";
     private boolean searching;
     private int searchCursor;
@@ -164,6 +164,11 @@ public class PcbEditorScreen extends Screen {
     private String libraryMessage = "";
     private boolean importOpen;
     private final List<String> importNames = new ArrayList<>();
+    /** Other players currently online, for the share picker. */
+    private final List<String> onlinePlayers = new ArrayList<>();
+    /** Index of the design being shared, and whether the picker is showing. */
+    private int sharing = -1;
+    private boolean shareOpen;
     private final List<Path> importPaths = new ArrayList<>();
     private int importScroll;
 
@@ -204,8 +209,11 @@ public class PcbEditorScreen extends Screen {
         canSaveDesign = payload.canSave();
         canImport = payload.canImport();
         designLimit = payload.limit();
+        onlinePlayers.clear();
+        onlinePlayers.addAll(payload.players());
         libraryOpen = true;
         importOpen = false;
+        shareOpen = false;
         libraryScroll = 0;
         naming = false;
         searching = false;
@@ -232,7 +240,6 @@ public class PcbEditorScreen extends Screen {
                 ? C2SLibraryPayload.item(slot, action, index, name)
                 : C2SLibraryPayload.block(pos, action, index, name));
     }
-
     private void confirmSave() {
         naming = false;
         if (canSaveDesign) {
@@ -288,15 +295,19 @@ public class PcbEditorScreen extends Screen {
         if (importOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderImportPanel(graphics, mouseX, mouseY);
-            // Deferred tooltips are flushed by Screen.renderWithTooltip after render() returns.
-            super.render(graphics, mouseX, mouseY, partialTick);
+            // No super.render here: Screen.render starts with renderBackground, which runs the
+            // menu-blur PostChain and blurred this panel itself. This screen draws its own buttons
+            // and never populates the vanilla renderables list, so super.render would only blur.
             return;
         }
 
         if (libraryOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
-            renderLibrary(graphics, mouseX, mouseY);
-            super.render(graphics, mouseX, mouseY, partialTick);
+            if (shareOpen) {
+                renderSharePanel(graphics, mouseX, mouseY);
+            } else {
+                renderLibrary(graphics, mouseX, mouseY);
+            }
             return;
         }
 
@@ -635,6 +646,15 @@ public class PcbEditorScreen extends Screen {
             return true;
         }
         if (libraryOpen) {
+            if (shareOpen) {
+                for (Button b : buttons) {
+                    if (b.contains(mouseX, mouseY)) {
+                        b.action.run();
+                        return true;
+                    }
+                }
+                return true;
+            }
             if (inNameField(mouseX, mouseY)) {
                 searching = false;
                 naming = true;
@@ -709,6 +729,9 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (libraryOpen || importOpen) {
+            return true;
+        }
         if (pressed && inCanvas(mouseX, mouseY)) {
             if (Math.abs(mouseX - pressX) + Math.abs(mouseY - pressY) > 4) {
                 dragging = true;
@@ -744,8 +767,10 @@ public class PcbEditorScreen extends Screen {
         if (button == 1) {
             if (hoverBlock != null) {
                 int index = BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]);
-                Part part = BoardStates.partOf(local[index]);
-                if (part.isContainer() && kind == C2SEditPayload.KIND_BLOCK) {
+                // Only the redstone parts answer to a right-click in place; anything else is asked of
+                // the server, which opens the block's own menu and falls back to interact if it has none.
+                boolean parity = !BoardEdit.interact(local[index]).equals(local[index]);
+                if (!parity && kind == C2SEditPayload.KIND_BLOCK) {
                     EditorReturn.stash(this);
                     send(C2SEditPayload.ACTION_OPEN_UI, index, null, null, false);
                 } else {
@@ -873,6 +898,17 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (importOpen) {
+            return true;
+        }
+        if (libraryOpen) {
+            if (shareOpen) {
+                return true;
+            }
+            libraryScroll = (int) Math.max(0,
+                    Math.min(libraryScroll - Math.signum(scrollY), Math.max(0, designs.size() - 8)));
+            return true;
+        }
         if (overPaletteGrid(mouseX, mouseY) && !hasControlDown()) {
             scrollPalette(scrollY > 0 ? -PAL_COLS : PAL_COLS);
         } else if (hasControlDown()) {
@@ -953,6 +989,17 @@ public class PcbEditorScreen extends Screen {
         if (importOpen) {
             if (keyCode == 256) { // Escape
                 importOpen = false;
+            }
+            return true;
+        }
+        if (libraryOpen) {
+            if (keyCode == 256) { // Escape
+                if (shareOpen) {
+                    shareOpen = false;
+                } else {
+                    libraryOpen = false;
+                    naming = false;
+                }
             }
             return true;
         }
@@ -1110,12 +1157,17 @@ public class PcbEditorScreen extends Screen {
                 : C2SEditPayload.face(pos, index, packed));
     }
 
-    /** Whether the editor's local grid copy has a container in the cell (only these can be attached). */
+    /**
+     * Whether the editor's local grid copy has a container in the cell (only these can be attached).
+     * The client cannot ask whether a block has a block entity, so the vanilla container blocks are
+     * listed explicitly; the server still validates by reading the real container from the region.
+     */
     private boolean isContainerCell(int index) {
         if (index < 0 || index >= local.length) {
             return false;
         }
-        return BoardStates.partOf(local[index]).isContainer();
+        return BoardStates.partOf(local[index]).isContainer()
+                || BoardStates.hasVanillaContainer(local[index]);
     }
 
     private void selectEntry(PcbIcons.Entry entry) {
@@ -1213,7 +1265,8 @@ public class PcbEditorScreen extends Screen {
             boolean active = selectedEntry != null && selectedEntry.item() == entry.item();
             boolean available = creative || countOf(entry.item()) > 0;
             drawSlot(graphics, sx, sy, active, available);
-            drawItem(graphics, entry.stack(), sx + 1, sy + 1, 16);
+            // drawSlot's inner face spans sx+1 .. sx+cell-3, so the icon is cell-4 wide.
+            drawItem(graphics, entry.stack(), sx + 1, sy + 1, cell - 4);
             int count = countOf(entry.item());
             if (!creative && count > 1) {
                 graphics.drawString(this.font, String.valueOf(count), sx + 11, sy + 9, 0xFFFFFF, true);
@@ -1295,13 +1348,13 @@ public class PcbEditorScreen extends Screen {
 
         // Signal inputs and the library, side by side.
         int half = (panelW - 2) / 2;
-        addButton(graphics, px, y, half, rowH, inputOn ? "Input: On" : "Input: Off",
+        addButton(graphics, px, y, half, rowH, inputOn ? "Redstone Input: On" : "Redstone Input: Off",
                 () -> {
                     send(C2SEditPayload.ACTION_TOGGLE_INPUT, 0, null, null, false);
                     inputOn = !inputOn;
                 });
         addButton(graphics, px + half + 2, y, panelW - half - 2, rowH,
-                outputOn ? "Output: On" : "Output: Off", () -> {
+                outputOn ? "Redstone Output: On" : "Redstone Output: Off", () -> {
                     send(C2SEditPayload.ACTION_TOGGLE_OUTPUT, 0, null, null, false);
                     outputOn = !outputOn;
                 });
@@ -1316,7 +1369,7 @@ public class PcbEditorScreen extends Screen {
         y += rowH + 4;
 
         graphics.drawString(this.font, "L: place  Shift+L: erase  R-click: use", px, y, 0x9F9F9F, false);
-        graphics.drawString(this.font, "R: rotate  G: gateway face", px, y + 10, 0x9F9F9F, false);
+        graphics.drawString(this.font, "R: rotate  G: item gateway face", px, y + 10, 0x9F9F9F, false);
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
@@ -1376,15 +1429,22 @@ public class PcbEditorScreen extends Screen {
             if (idx >= designs.size()) {
                 break;
             }
-            graphics.drawString(this.font, fit(designs.get(idx).name(), w - 118), x + 8, rowY + 3, 0xE0E0E0,
-                    false);
-            addButton(graphics, x + w - 102, rowY, 28, 14, "Exp", () -> exportDesign(idx));
-            addButton(graphics, x + w - 72, rowY, 30, 14, "Use", () -> {
+            S2CLibraryPayload.Design design = designs.get(idx);
+            String label = design.author().isEmpty() ? design.name()
+                    : design.name() + " (by " + design.author() + ")";
+            graphics.drawString(this.font, fit(label, w - 190), x + 8, rowY + 3, 0xE0E0E0, false);
+            addButton(graphics, x + w - 174, rowY, 28, 14, "Exp", () -> exportDesign(idx));
+            addButton(graphics, x + w - 144, rowY, 34, 14, "Share", () -> {
+                sharing = idx;
+                shareOpen = onlinePlayers.isEmpty();
+                libraryMessage = onlinePlayers.isEmpty() ? "Nobody else is online" : "";
+            });
+            addButton(graphics, x + w - 102, rowY, 28, 14, "Use", () -> {
                 libraryMessage = "";
                 sendLibrary(C2SLibraryPayload.ACTION_APPLY, idx);
                 libraryOpen = false;
             });
-            addButton(graphics, x + w - 38, rowY, 30, 14, "Del",
+            addButton(graphics, x + w - 72, rowY, 30, 14, "Del",
                     () -> sendLibrary(C2SLibraryPayload.ACTION_DELETE, idx));
             rowY += 18;
         }
@@ -1417,6 +1477,33 @@ public class PcbEditorScreen extends Screen {
         String saveLabel = designs.size() >= designLimit ? "Full"
                 : (canSaveDesign ? "Save" : "No Paper");
         addButton(graphics, x + w - 8 - saveW, nameRow, saveW, 16, saveLabel, this::confirmSave);
+    }
+
+    private void renderSharePanel(GuiGraphics graphics, int mouseX, int mouseY) {
+        int rows = Math.min(onlinePlayers.size(), 8);
+        int listH = Math.max(rows, 1) * 18;
+        int w = 280;
+        int h = 32 + listH + 30;
+        int x = (this.width - w) / 2;
+        int y = (this.height - h) / 2;
+        graphics.fill(x, y, x + w, y + h, 0xFF202020);
+        graphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0xFF3C3C3C);
+        graphics.drawString(this.font, "Share Design", x + 8, y + 8, 0xFFFFFF, false);
+        int rowY = y + 32;
+        for (int i = 0; i < rows; i++) {
+            String name = onlinePlayers.get(i);
+            addButton(graphics, x + 8, rowY, w - 16, 14, name, () -> {
+                libraryMessage = "Shared with " + name;
+                sendLibrary(C2SLibraryPayload.ACTION_SHARE, sharing, name);
+                shareOpen = false;
+            });
+            rowY += 18;
+        }
+        if (onlinePlayers.isEmpty()) {
+            graphics.drawString(this.font, "(nobody else is online)", x + 8, rowY + 3, 0x909090, false);
+        }
+        int by = y + h - 18;
+        addButton(graphics, x + w - 60, by, 52, 14, "Close", () -> shareOpen = false);
     }
 
     private void renderImportPanel(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -1473,7 +1560,7 @@ public class PcbEditorScreen extends Screen {
         }
         S2CLibraryPayload.Design design = designs.get(idx);
         try {
-            Path file = BlueprintFiles.write(design.name(), design.data());
+            Path file = BlueprintFiles.write(design.name(), design.data(), design.faces());
             libraryMessage = "Exported " + file.getFileName();
         } catch (Exception e) {
             libraryMessage = "Export failed";
@@ -1487,7 +1574,8 @@ public class PcbEditorScreen extends Screen {
         try {
             Blueprint blueprint = BlueprintFiles.read(importPaths.get(idx));
             RedstonePcbs.platform().sendToServer(new C2SLibraryPayload(kind, slot, pos,
-                    C2SLibraryPayload.ACTION_IMPORT, 0, blueprint.name(), blueprint.grid()));
+                    C2SLibraryPayload.ACTION_IMPORT, 0, blueprint.name(), blueprint.grid(),
+                    blueprint.faces()));
             libraryMessage = "Importing " + blueprint.name() + "...";
             importOpen = false;
         } catch (Exception e) {
@@ -1543,6 +1631,9 @@ public class PcbEditorScreen extends Screen {
 
     /** The tooltip to show for whatever is under the cursor, or {@code null} for none. */
     private Component buildTooltip() {
+        if (libraryOpen || importOpen) {
+            return null;
+        }
         for (TabRect tab : tabRects) {
             if (lastMouseX >= tab.x() && lastMouseX < tab.x() + tab.w()
                     && lastMouseY >= tab.y() && lastMouseY < tab.y() + tab.h()) {
