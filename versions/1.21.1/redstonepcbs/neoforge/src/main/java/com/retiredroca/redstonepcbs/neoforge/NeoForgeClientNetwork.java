@@ -14,9 +14,14 @@ public final class NeoForgeClientNetwork {
     public static void init(IEventBus modBus) {
         ClientEditorNetwork.install();
         NeoForge.EVENT_BUS.addListener(NeoForgeClientNetwork::onScreenClosing);
+        NeoForge.EVENT_BUS.addListener(NeoForgeClientNetwork::onClientTick);
     }
 
     private static void onScreenClosing(ScreenEvent.Closing event) {
         EditorReturn.onScreenRemoved(event.getScreen());
+    }
+
+    private static void onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
+        EditorReturn.clientTick();
     }
 }

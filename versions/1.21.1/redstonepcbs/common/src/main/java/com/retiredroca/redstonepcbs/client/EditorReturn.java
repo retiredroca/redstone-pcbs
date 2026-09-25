@@ -25,4 +25,20 @@ public final class EditorReturn {
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.execute(() -> minecraft.setScreen(editor));
     }
+
+    /**
+     * Restores a stashed editor once the world is showing again. The screen-removal hook only fires
+     * on the loader's own event, and a container menu can be dismissed by paths that never reach it
+     * (the player returning to the world, another screen replacing the menu). Polling here makes the
+     * return-to-editor behaviour independent of how the menu was closed; the {@code pending == null}
+     * guard keeps this from fighting the hook when it does fire.
+     */
+    public static void clientTick() {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (pending != null && minecraft.screen == null) {
+            PcbEditorScreen editor = pending;
+            pending = null;
+            minecraft.setScreen(editor);
+        }
+    }
 }

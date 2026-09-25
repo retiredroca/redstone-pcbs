@@ -9,18 +9,25 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.BlastFurnaceMenu;
 import net.minecraft.world.inventory.BrewingStandMenu;
+import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.CrafterMenu;
 import net.minecraft.world.inventory.CraftingContainer;
+import net.minecraft.world.inventory.DispenserMenu;
 import net.minecraft.world.inventory.FurnaceMenu;
 import net.minecraft.world.inventory.HopperMenu;
+import net.minecraft.world.inventory.ShulkerBoxMenu;
 import net.minecraft.world.inventory.SmokerMenu;
 import net.minecraft.world.entity.player.StackedContents;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
+import net.minecraft.world.level.block.entity.BarrelBlockEntity;
 import net.minecraft.world.level.block.entity.BlastFurnaceBlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BrewingStandBlockEntity;
+import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.entity.CrafterBlockEntity;
+import net.minecraft.world.level.block.entity.DispenserBlockEntity;
+import net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity;
 import net.minecraft.world.level.block.entity.SmokerBlockEntity;
 
 import java.lang.reflect.Field;
@@ -46,6 +53,23 @@ public final class BoardMenus {
         if (be instanceof BrewingStandBlockEntity brewing) {
             return open(player, title, (id, inv) -> new BrewingStandMenu(id, inv,
                     new Wrapper(brewing), data(brewing)));
+        }
+        if (be instanceof ChestBlockEntity chest) {
+            // threeRows, matching ChestBlockEntity.createMenu: a single chest has 9 slots. The
+            // 27-slot variant is only valid once a double chest has actually paired its two halves.
+            return open(player, title, (id, inv) ->
+                    ChestMenu.threeRows(id, inv, new Wrapper(chest)));
+        }
+        if (be instanceof BarrelBlockEntity barrel) {
+            return open(player, title, (id, inv) ->
+                    ChestMenu.threeRows(id, inv, new Wrapper(barrel)));
+        }
+        // DropperBlockEntity extends DispenserBlockEntity, so this covers both.
+        if (be instanceof DispenserBlockEntity dispenser) {
+            return open(player, title, (id, inv) -> new DispenserMenu(id, inv, new Wrapper(dispenser)));
+        }
+        if (be instanceof ShulkerBoxBlockEntity shulker) {
+            return open(player, title, (id, inv) -> new ShulkerBoxMenu(id, inv, new Wrapper(shulker)));
         }
         if (be instanceof Container container) {
             return open(player, title, (id, inv) -> new HopperMenu(id, inv, new Wrapper(container)));

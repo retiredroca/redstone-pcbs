@@ -20,6 +20,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ComparatorMode;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
 
+
 /**
  * The board's block palette: maps a {@link Part} plus a facing to the vanilla {@link BlockState} that
  * is placed in the board's backing region. From then on Minecraft owns the state and its behaviour.
@@ -118,6 +119,27 @@ public final class BoardStates {
             state = state.setValue(facingProperty, direction);
         }
         return state;
+    }
+
+    /**
+     * Whether a state is one of the vanilla blocks whose block entity is a {@link
+     * net.minecraft.world.Container}. The client has no level to ask, so the editor uses this to
+     * decide whether a cell may be given a gateway face; the server re-checks against the real
+     * container when it rebuilds the boundary slots.
+     */
+    public static boolean hasVanillaContainer(BlockState state) {
+        return state.is(Blocks.CHEST) || state.is(Blocks.TRAPPED_CHEST) || state.is(Blocks.BARREL)
+                || state.is(Blocks.DROPPER) || state.is(Blocks.DISPENSER) || state.is(Blocks.HOPPER)
+                || state.is(Blocks.FURNACE) || state.is(Blocks.BLAST_FURNACE) || state.is(Blocks.SMOKER)
+                || state.is(Blocks.BREWING_STAND) || state.is(Blocks.CRAFTER)
+                || state.is(Blocks.JUKEBOX) || state.is(Blocks.CHISELED_BOOKSHELF)
+                || state.is(Blocks.DECORATED_POT) || state.is(Blocks.VAULT)
+                || state.is(Blocks.WHITE_SHULKER_BOX) || state.is(Blocks.ORANGE_SHULKER_BOX)
+                || state.is(Blocks.MAGENTA_SHULKER_BOX) || state.is(Blocks.LIGHT_BLUE_SHULKER_BOX)
+                || state.is(Blocks.YELLOW_SHULKER_BOX) || state.is(Blocks.LIME_SHULKER_BOX)
+                || state.is(Blocks.PINK_SHULKER_BOX) || state.is(Blocks.GRAY_SHULKER_BOX)
+                || state.is(Blocks.LIGHT_GRAY_SHULKER_BOX) || state.is(Blocks.CYAN_SHULKER_BOX)
+                || state.is(Blocks.PURPLE_SHULKER_BOX) || state.is(Blocks.BLACK_SHULKER_BOX);
     }
 
     /** Whether {@code item} can be placed on the board (a known part, or any block item). */
