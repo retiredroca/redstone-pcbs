@@ -151,8 +151,16 @@ public final class ModNetwork {
             return;
         }
         BlockEntity target = space.blockEntity(index);
-        if (target != null) {
-            com.retiredroca.redstonepcbs.block.BoardMenus.open(player, target);
+        if (target != null && com.retiredroca.redstonepcbs.block.BoardMenus.open(player, target)) {
+            return;
+        }
+        // No container menu here, so the right-click was aimed at a redstone part: apply the same
+        // vanilla parity an ACTION_INTERACT would. BoardEdit.interact is a no-op for anything else.
+        BlockState[] grid = be.grid();
+        if (index >= 0 && index < grid.length) {
+            grid[index] = BoardEdit.interact(grid[index]);
+            be.setGrid(grid);
+            be.onEdited();
         }
     }
 
@@ -381,21 +389,33 @@ public final class ModNetwork {
                     sendLibrary(player);
                 }
             }
+            case C2SLibraryPayload.ACTION_SHARE -> {
+                shareDesign(player, payload);
+                sendLibrary(player);
+            }
             default -> sendLibrary(player);
         }
     }
 
     private static void sendLibrary(ServerPlayer player) {
-        List<LibraryData.Design> saved = LibraryData.get(player.serverLevel()).designs(player.getUUID());
+        LibraryData data = LibraryData.get(player.serverLevel());
+        List<LibraryData.Design> saved = data.designs(player.getUUID());
         List<S2CLibraryPayload.Design> designs = new ArrayList<>(saved.size());
         for (LibraryData.Design design : saved) {
-            designs.add(new S2CLibraryPayload.Design(design.name(), design.data()));
+            designs.add(new S2CLibraryPayload.Design(design.name(), design.data(), design.faces(),
+                    design.author()));
         }
         int limit = PcbsConfig.maxDesigns();
         boolean canSave = saved.size() < limit
                 && (player.isCreative() || Crafting.count(player, Items.PAPER) > 0);
+        List<String> online = new ArrayList<>();
+        for (ServerPlayer other : player.server.getPlayerList().getPlayers()) {
+            if (!other.getUUID().equals(player.getUUID())) {
+                online.add(other.getGameProfile().getName());
+            }
+        }
         RedstonePcbs.platform().sendToPlayer(player,
-                new S2CLibraryPayload(designs, canSave, limit, PcbsConfig.allowImport()));
+                new S2CLibraryPayload(designs, canSave, limit, PcbsConfig.allowImport(), online));
     }
 
     private static boolean saveDesign(ServerPlayer player, C2SLibraryPayload payload) {
@@ -412,9 +432,41 @@ public final class ModNetwork {
             return false;
         }
         list.add(new LibraryData.Design(cleanName(payload.name(), "Design " + (list.size() + 1)),
-                GridSerializer.write(grid)));
+                GridSerializer.write(grid), targetFaces(player, payload), ""));
         data.setDirty();
         return true;
+    }
+
+    /**
+     * Copies one of the sender's saved designs into another online player's library, stamped with the
+     * sender's name. The target's own per-player limit still applies, and the copy is an ordinary
+     * editable entry for them.
+     */
+    private static void shareDesign(ServerPlayer player, C2SLibraryPayload payload) {
+        LibraryData data = LibraryData.get(player.serverLevel());
+        List<LibraryData.Design> mine = data.designs(player.getUUID());
+        if (payload.index() < 0 || payload.index() >= mine.size() || payload.name() == null) {
+            return;
+        }
+        ServerPlayer target = null;
+        for (ServerPlayer candidate : player.server.getPlayerList().getPlayers()) {
+            if (!candidate.getUUID().equals(player.getUUID())
+                    && candidate.getGameProfile().getName().equals(payload.name())) {
+                target = candidate;
+                break;
+            }
+        }
+        if (target == null) {
+            return;
+        }
+        List<LibraryData.Design> theirs = data.designs(target.getUUID());
+        if (theirs.size() >= PcbsConfig.maxDesigns()) {
+            return;
+        }
+        LibraryData.Design design = mine.get(payload.index());
+        theirs.add(new LibraryData.Design(design.name(), design.data(), design.faces(),
+                player.getGameProfile().getName()));
+        data.setDirty();
     }
 
     /** Trims a player-supplied name to a printable, bounded label. */
@@ -453,7 +505,8 @@ public final class ModNetwork {
         if (list.size() >= PcbsConfig.maxDesigns()) {
             return false;
         }
-        list.add(new LibraryData.Design(cleanName(payload.name(), "Imported " + (list.size() + 1)), bytes));
+        list.add(new LibraryData.Design(cleanName(payload.name(), "Imported " + (list.size() + 1)),
+                bytes, payload.faces(), ""));
         data.setDirty();
         return true;
     }
@@ -473,9 +526,20 @@ public final class ModNetwork {
         if (payload.index() < 0 || payload.index() >= list.size()) {
             return;
         }
-        BlockState[] design = GridSerializer.read(list.get(payload.index()).data(),
+        LibraryData.Design saved = list.get(payload.index());
+        BlockState[] design = GridSerializer.read(saved.data(),
                 player.level().holderLookup(Registries.BLOCK));
-        setTargetGrid(player, payload, design);
+        setTargetGrid(player, payload, design, saved.faces());
+    }
+
+    /** The gateway attachments of the board or item a library request targets. */
+    private static byte[] targetFaces(ServerPlayer player, C2SLibraryPayload payload) {
+        if (payload.kind() == C2SEditPayload.KIND_ITEM) {
+            ItemStack stack = player.getInventory().getItem(payload.slot());
+            return stack.getItem() instanceof PcbItem ? readFaces(stack) : PcbAttach.EMPTY;
+        }
+        return player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be
+                ? be.attachBytes() : PcbAttach.EMPTY;
     }
 
     private static BlockState[] targetGrid(ServerPlayer player, C2SLibraryPayload payload) {
@@ -486,17 +550,22 @@ public final class ModNetwork {
         return player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be ? be.grid() : null;
     }
 
-    private static void setTargetGrid(ServerPlayer player, C2SLibraryPayload payload, BlockState[] grid) {
+    private static void setTargetGrid(ServerPlayer player, C2SLibraryPayload payload, BlockState[] grid,
+            byte[] faces) {
         if (payload.kind() == C2SEditPayload.KIND_ITEM) {
             ItemStack stack = player.getInventory().getItem(payload.slot());
             if (stack.getItem() instanceof PcbItem) {
-                stack.set(RedstonePcbs.platform().chip(), new ChipData(GridSerializer.write(grid)));
+                stack.set(RedstonePcbs.platform().chip(),
+                        new ChipData(ChipData.pack(faces, GridSerializer.write(grid))));
                 player.getInventory().setChanged();
                 player.inventoryMenu.broadcastChanges();
-                sendItemSnapshot(player, payload.slot(), grid);
+                sendItemSnapshot(player, payload.slot(), grid, faces);
             }
         } else if (player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be) {
             be.setGrid(grid);
+            if (faces != null && faces.length > 0) {
+                be.setAttachFaces(PcbAttach.decode(faces));
+            }
             be.onEdited();
             sendBlockSnapshot(player, payload.pos(), be);
         }

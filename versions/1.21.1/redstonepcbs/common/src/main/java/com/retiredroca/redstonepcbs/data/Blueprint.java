@@ -4,9 +4,13 @@ import com.google.gson.JsonObject;
 
 import java.util.Base64;
 
-/** A shareable PCB design: a display name plus the serialized grid, as JSON. */
-public record Blueprint(String name, byte[] grid) {
-    public static final int FORMAT = 1;
+/** A shareable PCB design: a display name, the serialized grid, and its gateway attachments. */
+public record Blueprint(String name, byte[] grid, byte[] faces) {
+    public Blueprint(String name, byte[] grid) {
+        this(name, grid, new byte[0]);
+    }
+
+    public static final int FORMAT = 2;
     /** Upper bound on a grid payload we are willing to read (bytes). */
     public static final int MAX_GRID_BYTES = 1 << 18;
 
@@ -15,6 +19,7 @@ public record Blueprint(String name, byte[] grid) {
         object.addProperty("format", FORMAT);
         object.addProperty("name", name);
         object.addProperty("grid", Base64.getEncoder().encodeToString(grid));
+        object.addProperty("faces", Base64.getEncoder().encodeToString(faces));
         return object;
     }
 
@@ -32,7 +37,15 @@ public record Blueprint(String name, byte[] grid) {
         if (data.length == 0 || data.length > MAX_GRID_BYTES) {
             throw new IllegalArgumentException("grid size out of range");
         }
+        byte[] faces = new byte[0];
+        if (object.has("faces")) {
+            try {
+                faces = Base64.getDecoder().decode(object.get("faces").getAsString());
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("bad faces encoding", e);
+            }
+        }
         String name = object.has("name") ? object.get("name").getAsString() : "Imported";
-        return new Blueprint(name, data);
+        return new Blueprint(name, data, faces);
     }
 }

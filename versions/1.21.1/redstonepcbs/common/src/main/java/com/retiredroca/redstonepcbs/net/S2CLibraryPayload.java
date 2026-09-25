@@ -12,10 +12,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Server -> client copy of the player's saved-designs library. */
-public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit, boolean canImport)
-        implements CustomPacketPayload {
-    /** A saved design: a display name and the serialized chip. */
-    public record Design(String name, byte[] data) {}
+public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit, boolean canImport,
+        List<String> players) implements CustomPacketPayload {
+    /**
+     * A saved design: its name, serialized grid, gateway attachment bytes, and the player who shared
+     * it (empty for the owner's own designs).
+     */
+    public record Design(String name, byte[] data, byte[] faces, String author) {
+        public Design(String name, byte[] data) {
+            this(name, data, new byte[0], "");
+        }
+    }
 
     public static final CustomPacketPayload.Type<S2CLibraryPayload> TYPE =
             new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(RedstonePcbs.MOD_ID, "library_sync"));
@@ -29,6 +36,12 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit
                 for (Design design : payload.designs()) {
                     ByteBufCodecs.STRING_UTF8.encode(buf, design.name());
                     ByteBufCodecs.BYTE_ARRAY.encode(buf, design.data());
+                    ByteBufCodecs.BYTE_ARRAY.encode(buf, design.faces());
+                    ByteBufCodecs.STRING_UTF8.encode(buf, design.author());
+                }
+                buf.writeInt(payload.players().size());
+                for (String player : payload.players()) {
+                    ByteBufCodecs.STRING_UTF8.encode(buf, player);
                 }
             },
             buf -> {
@@ -40,9 +53,16 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit
                 for (int i = 0; i < count; i++) {
                     String name = ByteBufCodecs.STRING_UTF8.decode(buf);
                     byte[] data = ByteBufCodecs.BYTE_ARRAY.decode(buf);
-                    designs.add(new Design(name, data));
+                    byte[] faces = ByteBufCodecs.BYTE_ARRAY.decode(buf);
+                    String author = ByteBufCodecs.STRING_UTF8.decode(buf);
+                    designs.add(new Design(name, data, faces, author));
                 }
-                return new S2CLibraryPayload(designs, canSave, limit, canImport);
+                int playerCount = buf.readInt();
+                List<String> players = new ArrayList<>(playerCount);
+                for (int i = 0; i < playerCount; i++) {
+                    players.add(ByteBufCodecs.STRING_UTF8.decode(buf));
+                }
+                return new S2CLibraryPayload(designs, canSave, limit, canImport, players);
             });
 
     @Override

@@ -30,11 +30,14 @@ save-persistent redstone board inside a single block.
   loading a design back onto a board consumes the matching items in survival. The per-player limit is
   `maxDesigns` in `config/redstonepcbs.json` (default 16), so single-player and creative worlds can
   raise it.
-- **Sharing blueprints** - the Library panel exports a design with "Exp" to
-  `redstonepcbs/blueprints/<name>.json` and imports files from that folder with "Import". A blueprint
-  is a small JSON document (name + base64 grid), so designs can be copied between worlds and players.
-  Importing is free (no paper) but still counts against the per-player limit; set `allowImport` to
-  `false` in the config to disable it.
+- **Sharing designs** - the Library panel has **Exp** to export a design as JSON to
+  `redstonepcbs/blueprints/<name>.json` inside the game folder (so it lands in the player's own files,
+  on a server or single-player), and **Import** to read files back from there. A blueprint is a small
+  JSON document (name + base64 grid + gateway attachments), so designs can be copied between worlds
+  and players; older grid-only files still import, just without their gateway faces. **Share** pushes a
+  saved design straight into another online player's library, stamped with your name, and it appears
+  in their list as an ordinary editable entry. Importing is free (no paper) but still counts against
+  the per-player limit; set `allowImport` to `false` in the config to disable it.
 - **Container parts** - place a furnace, blast furnace, smoker, brewing stand, crafter or hopper inside
   the board and right-click one in the editor to open its UI.
 - **Item gateway** - the board exchanges items with world hoppers through the PCB block. The gateway

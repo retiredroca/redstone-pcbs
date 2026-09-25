@@ -11,13 +11,20 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Client -> server request against the player's saved-designs library. */
 public record C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, int index, String name,
-        byte[] data) implements CustomPacketPayload {
+        byte[] data, byte[] faces) implements CustomPacketPayload {
+
+    public C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, int index, String name,
+            byte[] data) {
+        this(kind, slot, pos, action, index, name, data, EMPTY);
+    }
 
     public static final int ACTION_LIST = 0;
     public static final int ACTION_SAVE = 1;
     public static final int ACTION_APPLY = 2;
     public static final int ACTION_DELETE = 3;
     public static final int ACTION_IMPORT = 4;
+    /** Share a saved design into another online player's library. */
+    public static final int ACTION_SHARE = 5;
 
     private static final byte[] EMPTY = new byte[0];
 
@@ -33,6 +40,7 @@ public record C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, in
                 ByteBufCodecs.VAR_INT.encode(buf, payload.index());
                 ByteBufCodecs.STRING_UTF8.encode(buf, payload.name());
                 ByteBufCodecs.BYTE_ARRAY.encode(buf, payload.data());
+                ByteBufCodecs.BYTE_ARRAY.encode(buf, payload.faces());
             },
             buf -> new C2SLibraryPayload(
                     ByteBufCodecs.VAR_INT.decode(buf),
@@ -41,6 +49,7 @@ public record C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, in
                     ByteBufCodecs.VAR_INT.decode(buf),
                     ByteBufCodecs.VAR_INT.decode(buf),
                     ByteBufCodecs.STRING_UTF8.decode(buf),
+                    ByteBufCodecs.BYTE_ARRAY.decode(buf),
                     ByteBufCodecs.BYTE_ARRAY.decode(buf)));
 
     public static C2SLibraryPayload block(BlockPos pos, int action, int index) {

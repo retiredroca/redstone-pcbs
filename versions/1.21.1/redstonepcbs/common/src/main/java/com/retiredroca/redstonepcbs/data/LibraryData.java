@@ -15,7 +15,16 @@ import java.util.UUID;
 
 /** World-level, per-player store of saved PCB designs. Works identically in single-player. */
 public class LibraryData extends SavedData {
-    public record Design(String name, byte[] data) {}
+    /**
+     * A saved design. {@code faces} carries the per-cell gateway attachments and {@code author} the
+     * player who shared it in (empty for the owner's own designs); both default to empty so designs
+     * saved before either existed still load.
+     */
+    public record Design(String name, byte[] data, byte[] faces, String author) {
+        public Design(String name, byte[] data) {
+            this(name, data, new byte[0], "");
+        }
+    }
 
     /** Longest accepted design name. */
     public static final int MAX_NAME_LENGTH = 32;
@@ -44,6 +53,8 @@ public class LibraryData extends SavedData {
                 CompoundTag designTag = new CompoundTag();
                 designTag.putString("name", design.name());
                 designTag.putByteArray("data", design.data());
+                designTag.putByteArray("faces", design.faces());
+                designTag.putString("author", design.author());
                 list.add(designTag);
             }
             player.put("designs", list);
@@ -63,7 +74,8 @@ public class LibraryData extends SavedData {
             ListTag designs = player.getList("designs", Tag.TAG_COMPOUND);
             for (int j = 0; j < designs.size(); j++) {
                 CompoundTag design = designs.getCompound(j);
-                list.add(new Design(design.getString("name"), design.getByteArray("data")));
+                list.add(new Design(design.getString("name"), design.getByteArray("data"),
+                        design.getByteArray("faces"), design.getString("author")));
             }
             data.byPlayer.put(id, list);
         }
