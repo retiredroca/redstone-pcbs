@@ -14,8 +14,6 @@ import java.nio.ByteBuffer;
  * two are packed as {@code [facesLen][faces...][grid...]} so the format stays a single byte array.
  */
 public record ChipData(byte[] data) {
-    public static final ChipData EMPTY = new ChipData(new byte[0]);
-
     public static final Codec<ChipData> CODEC = Codec.BYTE_BUFFER.xmap(
             buffer -> {
                 byte[] bytes = new byte[buffer.remaining()];

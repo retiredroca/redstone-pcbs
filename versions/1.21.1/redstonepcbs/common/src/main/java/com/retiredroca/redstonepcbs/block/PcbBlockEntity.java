@@ -35,9 +35,9 @@ import java.util.Map;
  * A board. Its circuit lives in a {@value BoardSpace#SIZE}x{@value BoardSpace#SIZE}x{@value BoardSpace#SIZE}
  * region of the runtime board dimension as real blocks, so vanilla owns the redstone. This block
  * entity owns the region allocation, the client sync, the per-board flags, and the world item
- * gateway: each face exposes the inventories of the region's edge containers so world hoppers can
- * insert/extract through the PCB block. It also ticks like a hopper, pulling from a container
- * directly above it into the board's top edge.
+ * gateway: each face exposes the inventories of the containers explicitly attached to it (see
+ * {@link #attachFaces()}), so world hoppers can insert/extract through the PCB block. It also ticks
+ * like a hopper, pulling from a container directly above it into the board's top face.
  */
 public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hopper {
     private static final int SIZE = BoardSpace.SIZE;
@@ -50,7 +50,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private boolean externalOutput;
     private boolean initialized;
     private BlockState[] pendingGrid;
-    /** Cached view of the boundary-layer container slots, rebuilt each game tick. */
+    /** The slots this board exposes to the world, rebuilt at most once per game tick. */
     private List<SlotRef> boundarySlots = List.of();
     private long boundaryBuiltAt = Long.MIN_VALUE;
     private boolean loggedMissingDimension;
@@ -282,18 +282,16 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     }
 
     /**
-     * Rebuilds the gateway ports. A PCB face exposes the in-board containers whose editor cell sits on
-     * that face's edge layer (bottom face -> editor layer {@code y=0}, top face -> {@code y=SIZE-1},
-     * sides -> their edge columns), one per grid line. Slots are taken from the container's own vanilla
-     * face rules where it has them, so an in-board furnace/brewing stand keeps its real orientation.
+     * Rebuilds the gateway ports. Each PCB face exposes exactly the containers the editor assigned to
+     * it, so a container is reachable from the world only once it has been attached with {@code G}.
+     * Slots come from the container's own vanilla face rules where it has them, so an in-board
+     * furnace or brewing stand keeps its real orientation.
      *
-     * <p>Confirmed behaviour by face:
+     * <p>Transfer direction by face:
      * <ul>
-     *   <li>BOTTOM: an in-world hopper attached under the PCB pulls from the container on the board's
-     *       lowest editor layer.</li>
      *   <li>TOP: the block above may be air or a container (hopper, chest, furnace, blast furnace,
      *       smoker, brewer); the board pulls down from it.</li>
-     *   <li>SIDES (north/south/west/east): receive only, and only from a directly attached hopper.</li>
+     *   <li>BOTTOM and SIDES: receive only, and only from a hopper directly attached to that face.</li>
      * </ul>
      * A directly attached hopper is itself the non-air block on the queried face, so there is no
      * air requirement on any face.
@@ -452,7 +450,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     public int[] getSlotsForFace(@Nullable Direction direction) {
         ensureBoundarySlots();
         // The hopper-style pull passes no side; it enters from above, so it may only use the
-        // board's top-edge port (the container nearest the ceiling), matching the item gateway.
+        // containers attached to the board's top face.
         Dir face = direction == null ? Dir.UP : Directions.toChip(direction);
         int[] out = new int[boundarySlots.size()];
         int count = 0;
@@ -471,7 +469,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     @Override
     public boolean canPlaceItemThroughFace(int slot, ItemStack stack, @Nullable Direction direction) {
         SlotRef ref = slot(slot);
-        // A null direction is the hopper-style pull, which enters from above: top-edge port only.
+        // A null direction is the hopper-style pull, which enters from above: top face only.
         Dir face = direction == null ? Dir.UP : Directions.toChip(direction);
         if (ref == null || ref.face() != face
                 || !ref.container().canPlaceItem(ref.slot(), stack)) {

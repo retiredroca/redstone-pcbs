@@ -52,7 +52,7 @@ public enum Part {
     /** The vanilla container/processor behaviour a part runs inside the board. */
     public enum ContainerFamily {
         NONE,
-        /** 5-slot hopper; easy filter mode is handled by the boundary gate instead. */
+        /** 5-slot hopper; inserts and extracts through the board's gateway attachments. */
         HOPPER,
         /** Furnace/blast furnace/smoker: smelting with fuel and cook progress. */
         COOKER,

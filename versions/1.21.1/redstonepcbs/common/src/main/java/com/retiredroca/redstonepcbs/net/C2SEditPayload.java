@@ -24,9 +24,6 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static final int ACTION_TOGGLE_MODE = 5;
     public static final int ACTION_CLEAR_ALL = 6;
     public static final int ACTION_REQUEST = 7;
-    public static final int ACTION_SET_FILTER = 8;
-    public static final int ACTION_CLEAR_FILTER = 9;
-    public static final int ACTION_TOGGLE_HOPPER_MODE = 10;
     public static final int ACTION_OPEN_UI = 11;
     public static final int ACTION_PULSE_LAYER = 12;
     public static final int ACTION_TOGGLE_INPUT = 13;
@@ -72,11 +69,6 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
 
     public static C2SEditPayload item(int slot, int action, int index, int part, int facing, int flags) {
         return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, action, index, pack(part, facing, flags), "");
-    }
-
-    /** Filter action: {@code text} is the item-id pattern for the hopper at {@code index}. */
-    public static C2SEditPayload filter(BlockPos pos, int index, String text) {
-        return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_SET_FILTER, index, 0, text);
     }
 
     /** Place action: {@code text} is the item registry id, {@code packed} packs the facing (bits 8-15). */

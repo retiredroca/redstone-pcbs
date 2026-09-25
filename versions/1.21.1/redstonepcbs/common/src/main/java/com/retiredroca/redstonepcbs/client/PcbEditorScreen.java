@@ -10,7 +10,6 @@ import com.retiredroca.redstonepcbs.block.BoardSpace;
 import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbAttach;
-import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
@@ -32,10 +31,8 @@ import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderGetter;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -55,7 +52,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * PCB editor: a single perspective 3D view of the board, rendered with vanilla block models, that
+ * PCB editor: a single orthographic 3D view of the board, rendered with vanilla block models, that
  * can be grabbed and spun. Parts are placed/erased/interacted/rotated by ray-picking the grid.
  */
 public class PcbEditorScreen extends Screen {
@@ -63,13 +60,11 @@ public class PcbEditorScreen extends Screen {
     /** Palette grid: 9 columns x 3 rows, the creative-inventory layout. */
     private static final int PAL_COLS = 9;
     private static final int PAL_ROWS = 3;
-    private static final int PAL_PAGE = PAL_COLS * PAL_ROWS;
     /** Base widget metrics at 1.0 UI scale; the live values scale with the game resolution. */
     private static final int BASE_SLOT = 18;
     private static final int BASE_BTN_H = 14;
     /** The panel's non-grid chrome (tabs, search box, lower controls, help) in base units. */
     private static final int CHROME_H = 170;
-    private static final float FOV = 60.0F;
     /** Camera presets: 4 corner-overhead, 4 side-on (pitch 0), top. */
     private static final float[][] PRESETS = {
             {45, 35.264F}, {135, 35.264F}, {225, 35.264F}, {315, 35.264F},
@@ -365,12 +360,6 @@ public class PcbEditorScreen extends Screen {
         return m;
     }
 
-    /** Projects a board point through proj*cam into GUI pixels. */
-    private float[] projectWith(Matrix4f proj, Matrix4f cam, float x, float y, float z) {
-        Vector4f v = new Matrix4f(proj).mul(cam).transform(new Vector4f(x, y, z, 1.0F));
-        return new float[]{(v.x + 1.0F) * 0.5F * this.width, (1.0F - v.y) * 0.5F * this.height};
-    }
-
     private Matrix4f mvp() {
         return new Matrix4f(projection()).mul(cameraMatrix());
     }
@@ -528,7 +517,7 @@ public class PcbEditorScreen extends Screen {
         pose.popPose();
     }
 
-    /** Projects a board-space point to GUI pixels (matches projectWith). */
+    /** Projects a board-space point to GUI pixels. */
     private float[] project(Matrix4f mvp, float x, float y, float z) {
         Vector4f p = mvp.transform(new Vector4f(x, y, z, 1.0F));
         return new float[]{(p.x + 1.0F) * 0.5F * this.width, (1.0F - p.y) * 0.5F * this.height};
@@ -1058,8 +1047,6 @@ public class PcbEditorScreen extends Screen {
             }
             case 265, 264, 263, 262 -> { // arrow keys: no-op (pan is Ctrl/Alt + drag)
                 return true;
-            }
-            default -> {
             }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);

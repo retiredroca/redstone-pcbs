@@ -1,7 +1,6 @@
 package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
-import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.data.ChipData;
 
 import net.minecraft.core.BlockPos;
@@ -31,7 +30,10 @@ import org.jetbrains.annotations.Nullable;
 
 /** PCB interface block: right-click opens the editor, and it owns a board region in the board dimension. */
 public class PcbBlock extends Block implements EntityBlock {
-    /** Mirrors a face output for observers; the board's redstone lives in its region. */
+    /**
+     * World-facing power level. Reserved for a future world-facing redstone bridge; both signal getters
+     * return 0 today because the board's redstone lives in its region, not in this block.
+     */
     public static final IntegerProperty POWER = BlockStateProperties.POWER;
 
     public PcbBlock(Properties properties) {

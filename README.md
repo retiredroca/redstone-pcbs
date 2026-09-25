@@ -22,8 +22,7 @@ save-persistent redstone board inside a single block.
   has a clear one-chunk border on all sides (including diagonals); the board's own chunk is held
   ticking so redstone runs with no player nearby, and the border chunks are held loaded without
   ticking. Breaking a board packs the region back into the PCB item; placing it writes it back.
-  The dimension's height and mob-spawning settings are code parameters, so taller boards and
-  in-board mob spawning can be enabled later.
+  The dimension's height is a code parameter, so taller boards can be enabled later.
 - **Signal section** - the editor shows **Input** and **Output** switches (both off by default). The
   board's redstone is currently self-contained; world-facing redstone I/O is not wired yet.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
