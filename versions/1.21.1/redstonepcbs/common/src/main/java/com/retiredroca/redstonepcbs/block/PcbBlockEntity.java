@@ -150,6 +150,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             if (HopperBlockEntity.suckInItems(level, this)) {
                 cooldownTime = 0;
                 setChanged();
+                notifyGatewayContainers(Dir.UP);
             }
         }
     }
@@ -266,6 +267,17 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (now != boundaryBuiltAt) {
             boundaryBuiltAt = now;
             rebuildBoundarySlots();
+        }
+    }
+
+    private void notifyGatewayContainers(Dir face) {
+        ensureBoundarySlots();
+        Container notified = null;
+        for (SlotRef ref : boundarySlots) {
+            if (ref.face() == face && ref.container() != notified) {
+                notified = ref.container();
+                ref.container().setChanged();
+            }
         }
     }
 
@@ -415,12 +427,8 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         SlotRef ref = slot(slot);
         if (ref != null) {
             ref.container().setItem(ref.slot(), stack);
-            // Vanilla's hopper transport calls setChanged() on the *receiving* container (this
-            // gateway, in the overworld), so the in-board container's own setChanged() -> comparator /
-            // neighbour updates never run in the board dimension. Without this, a comparator reading an
-            // in-board container does not update when items cross the gateway on the loaders whose item
-            // path routes through this mutator (Fabric), while NeoForge's capability wrapper happens to
-            // hit it. Propagate explicitly so the board dimension sees the change on both loaders.
+            // Only the empty-slot insert path reaches this method; a transfer that merges into a
+            // non-empty slot grows the stack in place instead, and notifyGatewayContainers covers it.
             ref.container().setChanged();
         }
     }
