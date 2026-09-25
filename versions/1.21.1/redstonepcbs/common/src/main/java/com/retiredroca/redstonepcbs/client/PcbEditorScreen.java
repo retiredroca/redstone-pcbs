@@ -58,9 +58,15 @@ import java.util.Locale;
  */
 public class PcbEditorScreen extends Screen {
     private static final int GRID = BoardSpace.SIZE;
-    private static final int PAL_COLS = 3;
-    private static final int SLOT = 22;
-    private static final int BTN_H = 14;
+    /** Palette grid: 9 columns x 3 rows, the creative-inventory layout. */
+    private static final int PAL_COLS = 9;
+    private static final int PAL_ROWS = 3;
+    private static final int PAL_PAGE = PAL_COLS * PAL_ROWS;
+    /** Base widget metrics at 1.0 UI scale; the live values scale with the game resolution. */
+    private static final int BASE_SLOT = 18;
+    private static final int BASE_BTN_H = 14;
+    /** The panel's non-grid chrome (tabs, search box, lower controls, help) in base units. */
+    private static final int CHROME_H = 170;
     private static final float FOV = 60.0F;
     /** Camera presets: 4 corner-overhead, 4 side-on (pitch 0), top. */
     private static final float[][] PRESETS = {
@@ -79,7 +85,9 @@ public class PcbEditorScreen extends Screen {
     private BlockState[] local = GridSerializer.emptyGrid();
     private boolean inputOn;
     private boolean outputOn;
+    /** The part the selected palette entry corresponds to, or AIR for an arbitrary block item. */
     private Part selected = Part.DUST;
+    private PcbIcons.Entry selectedEntry;
     private Dir pendingFacing = Dir.NORTH;
     private int activeLayer;
 
@@ -112,9 +120,34 @@ public class PcbEditorScreen extends Screen {
     private double lastMouseX;
     private double lastMouseY;
 
-    private final int[] paletteCounts = new int[Part.VALUES.length];
-    private final boolean[] paletteAvailable = new boolean[Part.VALUES.length];
     private boolean creative;
+
+    /** How many of each item the player holds, refreshed each frame (survival palette gating). */
+    private final java.util.Map<Item, Integer> itemCounts = new java.util.HashMap<>();
+
+    // palette tabs + search
+    private PcbIcons.Tab activeTab = PcbIcons.Tab.REDSTONE;
+    private String search = "";
+    private boolean searching;
+    private int searchCursor;
+    private int searchX;
+    private int searchY;
+    private int searchW;
+    private int searchH;
+    private final List<TabRect> tabRects = new ArrayList<>();
+
+    // palette paging / scrolling
+    private int palettePage;
+    private int paletteScroll;
+    private int palRows = PAL_ROWS;
+    /** Live widget metrics, scaled from the base sizes to fit the current resolution. */
+    private int cell = BASE_SLOT;
+    private int rowH = BASE_BTN_H;
+    private int paletteGridX;
+    private int paletteGridY;
+    private int paletteGridW;
+    private int paletteGridH;
+    private final List<Button> pageButtons = new ArrayList<>();
 
     private final List<S2CLibraryPayload.Design> designs = new ArrayList<>();
     private boolean canSaveDesign;
@@ -174,6 +207,7 @@ public class PcbEditorScreen extends Screen {
         importOpen = false;
         libraryScroll = 0;
         naming = false;
+        searching = false;
         designName = "";
     }
 
@@ -210,8 +244,17 @@ public class PcbEditorScreen extends Screen {
     private void recalcLayout() {
         int top = 26;
         int margin = 8;
-        int panelIdeal = Math.max(PAL_COLS * SLOT, 140);
         int availH = Math.max(80, this.height - top - margin);
+
+        // Autoscale the widgets to the resolution: the full 9x3 layout targets the base metrics, but
+        // shrinks (or grows) so the panel chrome plus three grid rows always fit the window height.
+        int targetRows = PAL_ROWS;
+        int fullContent = CHROME_H + targetRows * BASE_SLOT;
+        float scale = Math.min(1.35F, Math.max(0.6F, availH / (float) fullContent));
+        cell = Math.max(10, Math.round(BASE_SLOT * scale));
+        rowH = Math.max(9, Math.round(BASE_BTN_H * scale));
+
+        int panelIdeal = Math.max(PAL_COLS * cell, 140);
         int availW = this.width - panelIdeal - margin * 3;
         int size = Math.max(80, Math.min(availH, availW));
         int contentW = size + 12 + panelIdeal;
@@ -221,6 +264,11 @@ public class PcbEditorScreen extends Screen {
         panelX = gridX + size + 12;
         panelY = gridY;
         panelW = panelIdeal;
+
+        // Fit the palette grid into whatever row budget remains; at least one row is always shown.
+        int chrome = Math.round(CHROME_H * (cell / (float) BASE_SLOT));
+        int gridSpace = Math.max(cell, availH - chrome);
+        palRows = Math.max(1, Math.min(targetRows, gridSpace / cell));
     }
 
     // --- rendering --------------------------------------------------------------------------------
@@ -229,7 +277,6 @@ public class PcbEditorScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         recalcLayout();
         computeInventory();
-        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.fill(0, 0, this.width, this.height, 0xB0101010);
         graphics.drawString(this.font, this.title, this.width / 2 - this.font.width(this.title) / 2, 8,
                 0xFFFFFF, false);
@@ -240,19 +287,30 @@ public class PcbEditorScreen extends Screen {
         if (importOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderImportPanel(graphics, mouseX, mouseY);
+            // super.render() flushes any queued tooltip last, so it draws above everything above.
+            super.render(graphics, mouseX, mouseY, partialTick);
             return;
         }
 
         if (libraryOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderLibrary(graphics, mouseX, mouseY);
+            super.render(graphics, mouseX, mouseY, partialTick);
             return;
         }
 
         raycast(mouseX, mouseY);
         render3D(graphics);
         renderPanel(graphics, mouseX, mouseY);
-        drawTooltips(graphics, mouseX, mouseY);
+        // Draw the tooltip ourselves, last, so the raw GL state from render3D cannot put it behind.
+        drawTooltip(graphics, mouseX, mouseY);
+    }
+
+    private void drawTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        Component tip = buildTooltip();
+        if (tip != null) {
+            graphics.renderTooltip(this.font, tip, mouseX, mouseY);
+        }
     }
 
     private boolean loggedModelError;
@@ -566,6 +624,7 @@ public class PcbEditorScreen extends Screen {
         }
         if (libraryOpen) {
             if (inNameField(mouseX, mouseY)) {
+                searching = false;
                 naming = true;
                 nameCursor = designName.length();
                 return true;
@@ -586,10 +645,41 @@ public class PcbEditorScreen extends Screen {
                 return true;
             }
         }
+        for (Button b : pageButtons) {
+            if (b.contains(mouseX, mouseY)) {
+                b.action.run();
+                return true;
+            }
+        }
+        for (TabRect t : tabRects) {
+            if (t.contains(mouseX, mouseY)) {
+                naming = false;
+                activeTab = t.tab();
+                palettePage = 0;
+                paletteScroll = 0;
+                if (t.tab() == PcbIcons.Tab.SEARCH) {
+                    searching = true;
+                    searchCursor = search.length();
+                } else {
+                    // Match the creative inventory: leaving the search tab clears the query.
+                    searching = false;
+                    search = "";
+                    searchCursor = 0;
+                }
+                return true;
+            }
+        }
+        if (inSearchField(mouseX, mouseY)) {
+            naming = false;
+            searching = true;
+            searchCursor = search.length();
+            return true;
+        }
+        searching = false;
         for (PaletteSlot s : paletteSlots) {
             if (s.contains(mouseX, mouseY)) {
-                if (creative || paletteAvailable[s.part.ordinal()]) {
-                    selectPart(s.part);
+                if (creative || countOf(s.entry().item()) > 0) {
+                    selectEntry(s.entry());
                 }
                 return true;
             }
@@ -667,21 +757,34 @@ public class PcbEditorScreen extends Screen {
     }
 
     private void placeAt(int x, int y, int z) {
-        int index = BoardSpace.index(x, y, z);
-        Part part = selected;
-        if (part == Part.AIR) {
+        if (selectedEntry == null) {
             return;
         }
-        Dir facing = resolveFacing(part, x, y, z);
+        int index = BoardSpace.index(x, y, z);
+        Dir facing = resolveFacing(selected, x, y, z);
         if (facing == null) {
             return;
         }
-        send(C2SEditPayload.ACTION_SET, index, part, facing, false);
-        local[index] = BoardStates.initial(part, facing);
+        String id = PcbIcons.idOf(selectedEntry.item());
+        sendPlace(index, id, facing);
+        BlockState preview = BoardStates.forItem(selectedEntry.item(), facing);
+        if (preview != null) {
+            local[index] = preview;
+        }
+    }
+
+    private void sendPlace(int index, String itemId, Dir facing) {
+        RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
+                ? C2SEditPayload.placeItem(cell, index, itemId, facing.ordinal(), 0)
+                : C2SEditPayload.place(pos, index, itemId, facing.ordinal(), 0));
     }
 
     private Dir resolveFacing(Part part, int x, int y, int z) {
         Dir hit = adjacentDir(x, y, z);
+        // An arbitrary block (no known part) has no facing family; use the pending/adjacent face.
+        if (part == Part.AIR) {
+            return hit != null ? hit : pendingFacing;
+        }
         return switch (part.facingFamily()) {
             case TORCH -> {
                 // Attach to the clicked face if it can support a torch, else any supported side.
@@ -758,12 +861,37 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (hasControlDown()) {
+        if (overPaletteGrid(mouseX, mouseY) && !hasControlDown()) {
+            scrollPalette(scrollY > 0 ? -PAL_COLS : PAL_COLS);
+        } else if (hasControlDown()) {
             zoomBy(scrollY > 0 ? 0.05F : -0.05F, mouseX, mouseY);
         } else {
             activeLayer = Math.floorMod(activeLayer + (scrollY > 0 ? 1 : -1), GRID);
         }
         return true;
+    }
+
+    private boolean overPaletteGrid(double mouseX, double mouseY) {
+        return mouseX >= paletteGridX && mouseX < paletteGridX + paletteGridW
+                && mouseY >= paletteGridY && mouseY < paletteGridY + paletteGridH;
+    }
+
+    /** Scrolls the palette window by {@code delta} entries, advancing the page at the ends. */
+    private void scrollPalette(int delta) {
+        int total = visibleEntries().size();
+        int page = pageSize();
+        if (total <= page) {
+            paletteScroll = 0;
+            return;
+        }
+        int abs = palettePage * page + paletteScroll + delta;
+        abs = Math.max(0, Math.min(abs, total - page));
+        palettePage = abs / page;
+        paletteScroll = abs % page;
+    }
+
+    private int pageSize() {
+        return PAL_COLS * palRows;
     }
 
     private static float clampZoom(float z) {
@@ -797,6 +925,14 @@ public class PcbEditorScreen extends Screen {
             }
             return true;
         }
+        if (searching) {
+            if (codePoint >= ' ' && codePoint != '\u00a7' && search.length() < 32) {
+                int cursor = Math.max(0, Math.min(searchCursor, search.length()));
+                search = search.substring(0, cursor) + codePoint + search.substring(cursor);
+                searchCursor = cursor + 1;
+            }
+            return true;
+        }
         return super.charTyped(codePoint, modifiers);
     }
 
@@ -807,6 +943,40 @@ public class PcbEditorScreen extends Screen {
                 importOpen = false;
             }
             return true;
+        }
+        if (searching) {
+            switch (keyCode) {
+                case 256 -> { // Escape
+                    searching = false;
+                    return true;
+                }
+                case 259 -> { // Backspace
+                    if (searchCursor > 0 && !search.isEmpty()) {
+                        int cursor = Math.min(searchCursor, search.length());
+                        search = search.substring(0, cursor - 1) + search.substring(cursor);
+                        searchCursor = cursor - 1;
+                    }
+                    return true;
+                }
+                case 261 -> { // Delete
+                    if (searchCursor < search.length()) {
+                        search = search.substring(0, searchCursor) + search.substring(searchCursor + 1);
+                    }
+                    return true;
+                }
+                case 262 -> { // Right
+                    searchCursor = Math.min(search.length(), searchCursor + 1);
+                    return true;
+                }
+                case 263 -> { // Left
+                    searchCursor = Math.max(0, searchCursor - 1);
+                    return true;
+                }
+                default -> {
+                    // Let charTyped consume printable keys; swallow everything else so hotkeys stay off.
+                    return true;
+                }
+            }
         }
         if (naming) {
             switch (keyCode) {
@@ -857,20 +1027,6 @@ public class PcbEditorScreen extends Screen {
                 }
                 return true;
             }
-            case 68 -> { // D
-                if (index >= 0) {
-                    send(C2SEditPayload.ACTION_CYCLE_DELAY, index, null, null, false);
-                    local[index] = BoardEdit.cycleDelay(local[index]);
-                }
-                return true;
-            }
-            case 77 -> { // M
-                if (index >= 0) {
-                    send(C2SEditPayload.ACTION_TOGGLE_MODE, index, null, null, false);
-                    local[index] = BoardEdit.toggleComparatorMode(local[index]);
-                }
-                return true;
-            }
             case 265, 264, 263, 262 -> { // arrow keys: no-op (pan is Ctrl/Alt + drag)
                 return true;
             }
@@ -895,9 +1051,13 @@ public class PcbEditorScreen extends Screen {
         };
     }
 
-    private void selectPart(Part part) {
-        selected = part;
-        pendingFacing = part.needsSupport() || part.pointsAtNeighbour() ? Dir.DOWN : Dir.NORTH;
+    private void selectEntry(PcbIcons.Entry entry) {
+        selectedEntry = entry;
+        Part part = BoardStates.partFor(entry.item());
+        selected = part == null ? Part.AIR : part;
+        // A directional known part starts aimed sensibly; a plain block stays flat.
+        pendingFacing = (part != null && (part.needsSupport() || part.pointsAtNeighbour()))
+                ? Dir.DOWN : Dir.NORTH;
     }
 
     // --- panel ------------------------------------------------------------------------------------
@@ -905,55 +1065,157 @@ public class PcbEditorScreen extends Screen {
     private void renderPanel(GuiGraphics graphics, int mouseX, int mouseY) {
         int px = panelX;
         int py = panelY;
-        int slots = (int) Math.ceil(PcbIcons.PALETTE.length / (double) PAL_COLS);
-        int slotsH = slots * SLOT;
 
-        for (int i = 0; i < PcbIcons.PALETTE.length; i++) {
-            Part part = PcbIcons.PALETTE[i];
-            int sx = px + (i % PAL_COLS) * SLOT;
-            int sy = py + (i / PAL_COLS) * SLOT;
-            boolean active = selected == part;
-            drawSlot(graphics, sx, sy, active, paletteAvailable[part.ordinal()]);
-            drawItem(graphics, PcbIcons.stackFor(part), sx + 3, sy + 3, 16);
-            if (!creative && paletteCounts[part.ordinal()] > 1) {
-                graphics.drawString(this.font, String.valueOf(paletteCounts[part.ordinal()]), sx + 13, sy + 12,
-                        0xFFFFFF, true);
+        // Tab strip: uniform square icon tabs (creative-style), tooltip shows the name.
+        tabRects.clear();
+        int tabY = py;
+        int tx = px;
+        int tabSize = cell;
+        for (PcbIcons.Tab tab : PcbIcons.TABS) {
+            if (tx + tabSize > px + panelW) {
+                tx = px;
+                tabY += tabSize + 2;
             }
-            paletteSlots.add(new PaletteSlot(part, sx, sy, SLOT, SLOT));
+            boolean active = activeTab == tab;
+            boolean hovered = mouseX >= tx && mouseX < tx + tabSize && mouseY >= tabY && mouseY < tabY + tabSize;
+            int bg = active ? 0xFF8B8B8B : (hovered ? 0xFF505050 : 0xFF303030);
+            graphics.fill(tx, tabY, tx + tabSize, tabY + tabSize, bg);
+            graphics.fill(tx + 1, tabY + 1, tx + tabSize - 1, tabY + tabSize - 1,
+                    active ? 0xFF5A5A5A : 0xFF212121);
+            drawItem(graphics, new ItemStack(tab.icon), tx + 1, tabY + 1, 16);
+            tabRects.add(new TabRect(tab, tx, tabY, tabSize, tabSize));
+            tx += tabSize + 2;
+        }
+        int y = tabY + tabSize + 4;
+
+        // Search field, shown only on the search tab (as in the creative inventory).
+        if (activeTab == PcbIcons.Tab.SEARCH) {
+            searchX = px;
+            searchY = y;
+            searchW = panelW;
+            searchH = 16;
+            graphics.fill(searchX, searchY, searchX + searchW, searchY + searchH,
+                    searching ? 0xFF101010 : 0xFF181818);
+            int border = searching ? 0xFF9FA9FF : 0xFF606060;
+            graphics.fill(searchX, searchY, searchX + searchW, searchY + 1, border);
+            graphics.fill(searchX, searchY + searchH - 1, searchX + searchW, searchY + searchH, border);
+            graphics.fill(searchX, searchY, searchX + 1, searchY + searchH, border);
+            graphics.fill(searchX + searchW - 1, searchY, searchX + searchW, searchY + searchH, border);
+            if (search.isEmpty()) {
+                graphics.drawString(this.font, "Search", searchX + 4, searchY + 4, 0xFF707070, false);
+            } else {
+                graphics.drawString(this.font, fit(search, searchW - 8), searchX + 4, searchY + 4, 0xFFFFFF,
+                        false);
+            }
+            if (searching && (System.currentTimeMillis() / 500L) % 2L == 0L) {
+                int cursor = Math.max(0, Math.min(searchCursor, search.length()));
+                int cx = searchX + 4 + this.font.width(search.substring(0, cursor));
+                graphics.fill(cx, searchY + 3, cx + 1, searchY + searchH - 3, 0xFFFFFFFF);
+            }
+            y += searchH + 4;
+        } else {
+            // No search box on a category tab, so its hit-box must not linger from the last frame.
+            searchW = 0;
         }
 
-        int y = py + slotsH + 6;
-        graphics.drawString(this.font, "View", px, y, 0xFFFFFF, false);
-        y += 10;
+        // Palette grid: 9 columns, 1-3 rows, paged and wheel-scrollable when there are more items.
+        List<PcbIcons.Entry> visible = visibleEntries();
+        int total = visible.size();
+        int page = pageSize();
+        int pageCount = Math.max(1, (int) Math.ceil(total / (double) page));
+        palettePage = Math.max(0, Math.min(palettePage, pageCount - 1));
+        paletteScroll = Math.max(0, Math.min(paletteScroll, Math.max(0, total - page)));
+        // Scrolling shifts the window; paging snaps it. Only one is non-zero at a time.
+        int start = Math.min(palettePage * page + paletteScroll, Math.max(0, total - 1));
+        if (total == 0) {
+            start = 0;
+        }
+
+        paletteGridX = px;
+        paletteGridY = y;
+        paletteGridW = PAL_COLS * cell;
+        paletteGridH = palRows * cell;
+        for (int i = 0; i < page; i++) {
+            int idx = start + i;
+            if (idx >= total) {
+                break;
+            }
+            PcbIcons.Entry entry = visible.get(idx);
+            int sx = px + (i % PAL_COLS) * cell;
+            int sy = y + (i / PAL_COLS) * cell;
+            boolean active = selectedEntry != null && selectedEntry.item() == entry.item();
+            boolean available = creative || countOf(entry.item()) > 0;
+            drawSlot(graphics, sx, sy, active, available);
+            drawItem(graphics, entry.stack(), sx + 1, sy + 1, 16);
+            int count = countOf(entry.item());
+            if (!creative && count > 1) {
+                graphics.drawString(this.font, String.valueOf(count), sx + 11, sy + 9, 0xFFFFFF, true);
+            }
+            paletteSlots.add(new PaletteSlot(entry, sx, sy, cell, cell));
+        }
+
+        y = paletteGridY + paletteGridH + 2;
+
+        // Page / scroll indicator with arrows (both paging and hover-wheel scrolling are supported).
+        pageButtons.clear();
+        if (pageCount > 1 || total > page) {
+            addPageButton(graphics, px, y, "<", () -> {
+                if (paletteScroll > 0) {
+                    paletteScroll = Math.max(0, paletteScroll - PAL_COLS);
+                } else if (palettePage > 0) {
+                    palettePage--;
+                }
+            });
+            int pageNo = Math.min(palettePage + 1, pageCount);
+            graphics.drawString(this.font, pageNo + "/" + pageCount, px + 22, y + 3, 0xE0E0E0, false);
+            addPageButton(graphics, px + 46, y, ">", () -> {
+                int maxScroll = Math.max(0, total - page);
+                if (palettePage < pageCount - 1) {
+                    palettePage++;
+                    paletteScroll = 0;
+                } else if (paletteScroll < maxScroll) {
+                    paletteScroll = Math.min(maxScroll, paletteScroll + PAL_COLS);
+                }
+            });
+            y += rowH + 2;
+        } else {
+            paletteScroll = 0;
+        }
+
+        y += 4;
+
+        // View presets: two compact rows (5 + 4), sized to the panel width.
         for (int i = 0; i < PRESETS.length; i++) {
-            int col = i % 4;
-            int row = i / 4;
-            int bx = px + col * 26;
-            int by = y + row * (BTN_H + 1);
+            int col = i % 5;
+            int row = i / 5;
+            int bx = px + col * (panelW / 5);
+            int by = y + row * (rowH + 1);
             final int idx = i;
-            addButton(graphics, bx, by, 24, BTN_H, PRESET_LABELS[i], () -> {
+            addButton(graphics, bx, by, panelW / 5 - 2, rowH, PRESET_LABELS[i], () -> {
                 yaw = PRESETS[idx][0];
                 pitch = PRESETS[idx][1];
             });
         }
-        y += (BTN_H + 1) * 3 + 4;
+        y += (rowH + 1) * 2 + 3;
 
-        addButton(graphics, px, y, 20, BTN_H, "-",
+        // Zoom row.
+        addButton(graphics, px, y, 20, rowH, "-",
                 () -> zoomBy(-0.05F, gridX + gridSize / 2.0F, gridY + gridSize / 2.0F));
-        addButton(graphics, px + 22, y, 20, BTN_H, "+",
+        addButton(graphics, px + 22, y, 20, rowH, "+",
                 () -> zoomBy(0.05F, gridX + gridSize / 2.0F, gridY + gridSize / 2.0F));
-        addButton(graphics, px + 44, y, 46, BTN_H, "Reset", () -> {
+        addButton(graphics, px + 44, y, 46, rowH, "Reset", () -> {
             zoom = 0.9F;
             panX = 0.0F;
             panY = 0.0F;
         });
         graphics.drawString(this.font, Math.round(zoom * 100) + "%", px + 94, y + 3, 0xFFFFFF, false);
-        y += BTN_H + 2;
-        addButton(graphics, px, y, 20, BTN_H, "-", () -> activeLayer = Math.max(0, activeLayer - 1));
-        addButton(graphics, px + 22, y, 20, BTN_H, "+", () -> activeLayer = Math.min(GRID - 1, activeLayer + 1));
-        graphics.drawString(this.font, "Layer " + (activeLayer + 1) + "/16", px + 46, y + 3, 0xFFFFFF, false);
-        y += BTN_H + 2;
-        addButton(graphics, px, y, 100, BTN_H, "Pulse Layer", () -> {
+        y += rowH + 2;
+
+        // Layer row: zoom out/in, layer number, and the pulse button on the same line.
+        addButton(graphics, px, y, 20, rowH, "-", () -> activeLayer = Math.max(0, activeLayer - 1));
+        addButton(graphics, px + 22, y, 20, rowH, "+", () -> activeLayer = Math.min(GRID - 1, activeLayer + 1));
+        graphics.drawString(this.font, "L " + (activeLayer + 1) + "/16", px + 46, y + 3, 0xFFFFFF, false);
+        addButton(graphics, px + 90, y, panelW - 90, rowH, "Pulse Layer", () -> {
             send(C2SEditPayload.ACTION_PULSE_LAYER, activeLayer, null, null, false);
             for (int lx = 0; lx < BoardSpace.SIZE; lx++) {
                 for (int lz = 0; lz < BoardSpace.SIZE; lz++) {
@@ -962,39 +1224,39 @@ public class PcbEditorScreen extends Screen {
                 }
             }
         });
-        y += BTN_H + 2;
+        y += rowH + 3;
 
-        graphics.drawString(this.font, "Signal", px, y, 0xFFFFFF, false);
-        y += 10;
-        addButton(graphics, px, y, 66, BTN_H, inputOn ? "Input: On" : "Input: Off",
+        // Signal inputs and the library, side by side.
+        int half = (panelW - 2) / 2;
+        addButton(graphics, px, y, half, rowH, inputOn ? "Input: On" : "Input: Off",
                 () -> {
                     send(C2SEditPayload.ACTION_TOGGLE_INPUT, 0, null, null, false);
                     inputOn = !inputOn;
                 });
-        addButton(graphics, px + 70, y, 70, BTN_H, outputOn ? "Output: On" : "Output: Off",
-                () -> {
+        addButton(graphics, px + half + 2, y, panelW - half - 2, rowH,
+                outputOn ? "Output: On" : "Output: Off", () -> {
                     send(C2SEditPayload.ACTION_TOGGLE_OUTPUT, 0, null, null, false);
                     outputOn = !outputOn;
                 });
-        y += BTN_H + 4;
+        y += rowH + 3;
 
-        addButton(graphics, px, y, 100, BTN_H, "Library", () -> {
+        addButton(graphics, px, y, panelW, rowH, "Library", () -> {
             libraryMessage = "";
+            searching = false;
             libraryOpen = true;
             sendLibrary(C2SLibraryPayload.ACTION_LIST, 0);
         });
-        y += BTN_H + 4;
+        y += rowH + 4;
 
-        graphics.drawString(this.font, "Drag: spin  L: place", px, y, 0x9F9F9F, false);
-        graphics.drawString(this.font, "Shift+L: erase  R: interact", px, y + 10, 0x9F9F9F, false);
-        graphics.drawString(this.font, "D: delay  M: mode  scroll: layer", px, y + 20, 0x9F9F9F, false);
+        graphics.drawString(this.font, "L: place  Shift+L: erase", px, y, 0x9F9F9F, false);
+        graphics.drawString(this.font, "R: interact/rotate", px, y + 10, 0x9F9F9F, false);
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
-        graphics.fill(x, y, x + SLOT - 2, y + SLOT - 2, active ? 0xFFFFE080 : 0xFF373737);
-        graphics.fill(x + 1, y + 1, x + SLOT - 3, y + SLOT - 3, 0xFF8B8B8B);
+        graphics.fill(x, y, x + cell - 2, y + cell - 2, active ? 0xFFFFE080 : 0xFF373737);
+        graphics.fill(x + 1, y + 1, x + cell - 3, y + cell - 3, 0xFF8B8B8B);
         if (!hasStock) {
-            graphics.fill(x + 1, y + 1, x + SLOT - 3, y + SLOT - 3, 0x80000000);
+            graphics.fill(x + 1, y + 1, x + cell - 3, y + cell - 3, 0x80000000);
         }
     }
 
@@ -1003,6 +1265,15 @@ public class PcbEditorScreen extends Screen {
         graphics.fill(x, y, x + w, y + h, hovered ? 0xFF505050 : 0xFF303030);
         graphics.drawString(this.font, fit(label, w - 6), x + 3, y + 3, 0xE0E0E0, false);
         buttons.add(new Button(x, y, w, h, action));
+    }
+
+    /** A small palette page/scroll arrow, registered separately from the main buttons list. */
+    private void addPageButton(GuiGraphics graphics, int x, int y, String label, Runnable action) {
+        int w = 20;
+        boolean hovered = lastMouseX >= x && lastMouseX < x + w && lastMouseY >= y && lastMouseY < y + rowH;
+        graphics.fill(x, y, x + w, y + rowH, hovered ? 0xFF505050 : 0xFF303030);
+        graphics.drawString(this.font, label, x + (w - this.font.width(label)) / 2, y + 3, 0xE0E0E0, false);
+        pageButtons.add(new Button(x, y, w, rowH, action));
     }
 
     /** Truncates a label with an ellipsis so it can never spill outside its button. */
@@ -1185,6 +1456,12 @@ public class PcbEditorScreen extends Screen {
                 && mouseY >= nameFieldY && mouseY < nameFieldY + nameFieldH;
     }
 
+    private boolean inSearchField(double mouseX, double mouseY) {
+        return activeTab == PcbIcons.Tab.SEARCH
+                && mouseX >= searchX && mouseX < searchX + searchW
+                && mouseY >= searchY && mouseY < searchY + searchH;
+    }
+
     private void drawItem(GuiGraphics graphics, ItemStack stack, int x, int y, int size) {
         if (stack.isEmpty()) {
             return;
@@ -1197,11 +1474,11 @@ public class PcbEditorScreen extends Screen {
         graphics.pose().popPose();
     }
 
-    private void drawTooltips(GuiGraphics graphics, int mouseX, int mouseY) {
+    /** The tooltip to show for whatever is under the cursor, or {@code null} for none. */
+    private Component buildTooltip() {
         for (PaletteSlot slot : paletteSlots) {
-            if (slot.contains(mouseX, mouseY)) {
-                setTooltipForNextRenderPass(PcbIcons.nameOf(slot.part));
-                return;
+            if (slot.contains(lastMouseX, lastMouseY)) {
+                return slot.entry().stack().getHoverName();
             }
         }
         if (hoverBlock != null) {
@@ -1221,8 +1498,9 @@ public class PcbEditorScreen extends Screen {
                 lines.add(Component.literal("power "
                         + state.getValue(net.minecraft.world.level.block.RedStoneWireBlock.POWER)));
             }
-            setTooltipForNextRenderPass(join(lines));
+            return join(lines);
         }
+        return null;
     }
 
     private static Component join(List<Component> lines) {
@@ -1236,37 +1514,49 @@ public class PcbEditorScreen extends Screen {
         return joined;
     }
 
+    /**
+     * The palette entries to show: the active tab's creative items, filtered by the search query and
+     * (outside creative) to items the player actually holds. Search is case-insensitive over the
+     * display name.
+     */
+    private List<PcbIcons.Entry> visibleEntries() {
+        String query = search.strip().toLowerCase(Locale.ROOT);
+        List<PcbIcons.Entry> out = new ArrayList<>();
+        for (PcbIcons.Entry entry : PcbIcons.entries(activeTab)) {
+            if (!query.isEmpty()
+                    && !entry.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
+                continue;
+            }
+            if (!creative && countOf(entry.item()) <= 0) {
+                continue;
+            }
+            out.add(entry);
+        }
+        return out;
+    }
+
     private void computeInventory() {
         creative = this.minecraft != null && this.minecraft.player != null
                 && this.minecraft.player.isCreative();
-        for (int i = 0; i < paletteCounts.length; i++) {
-            paletteCounts[i] = 0;
-            paletteAvailable[i] = false;
-        }
+        itemCounts.clear();
         if (this.minecraft == null || this.minecraft.player == null || this.minecraft.level == null) {
             return;
         }
         Inventory inv = this.minecraft.player.getInventory();
         countInto(inv.items);
         countInto(inv.offhand);
-        for (Part part : PcbIcons.PALETTE) {
-            paletteAvailable[part.ordinal()] = com.retiredroca.redstonepcbs.craft.Crafting.available(
-                    this.minecraft.player, PcbIcons.itemFor(part));
-        }
     }
 
     private void countInto(List<ItemStack> stacks) {
         for (ItemStack stack : stacks) {
-            if (stack.isEmpty()) {
-                continue;
-            }
-            Item item = stack.getItem();
-            for (Part part : PcbIcons.PALETTE) {
-                if (PcbIcons.itemFor(part) == item) {
-                    paletteCounts[part.ordinal()] += stack.getCount();
-                }
+            if (!stack.isEmpty()) {
+                itemCounts.merge(stack.getItem(), stack.getCount(), Integer::sum);
             }
         }
+    }
+
+    private int countOf(Item item) {
+        return itemCounts.getOrDefault(item, 0);
     }
 
     @Override
@@ -1297,7 +1587,13 @@ public class PcbEditorScreen extends Screen {
         }
     }
 
-    private record PaletteSlot(Part part, int x, int y, int w, int h) {
+    private record PaletteSlot(PcbIcons.Entry entry, int x, int y, int w, int h) {
+        boolean contains(double mx, double my) {
+            return mx >= x && mx < x + w && my >= y && my < y + h;
+        }
+    }
+
+    private record TabRect(PcbIcons.Tab tab, int x, int y, int w, int h) {
         boolean contains(double mx, double my) {
             return mx >= x && mx < x + w && my >= y && my < y + h;
         }

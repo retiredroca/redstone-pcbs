@@ -16,8 +16,10 @@ import com.retiredroca.redstonepcbs.data.LibraryData;
 import com.retiredroca.redstonepcbs.item.PcbItem;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -139,6 +141,7 @@ public final class ModNetwork {
         }
         return switch (payload.action()) {
             case C2SEditPayload.ACTION_SET -> setCell(player, grid, index, payload);
+            case C2SEditPayload.ACTION_PLACE -> placeItem(player, grid, index, payload);
             case C2SEditPayload.ACTION_CLEAR -> clearCell(player, grid, index);
             case C2SEditPayload.ACTION_ROTATE -> {
                 grid[index] = BoardEdit.rotate(grid[index]);
@@ -187,6 +190,37 @@ public final class ModNetwork {
             refund(player, old);
         }
         grid[index] = BoardStates.initial(part, Dir.byOrdinal(payload.facing()));
+        return true;
+    }
+
+    /**
+     * Places an arbitrary item on the board. The item id is resolved to a state via
+     * {@link BoardStates#forItem}; a known part consumes its own item, anything else consumes the
+     * placed item. The replaced block is refunded by its known part's item (so redstone dust refunds
+     * correctly) or by {@code Block.asItem()}.
+     */
+    private static boolean placeItem(ServerPlayer player, BlockState[] grid, int index, C2SEditPayload payload) {
+        ResourceLocation id = ResourceLocation.tryParse(payload.text());
+        if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) {
+            return false;
+        }
+        Item item = BuiltInRegistries.ITEM.get(id);
+        Dir facing = Dir.byOrdinal(payload.facing());
+        BlockState state = BoardStates.forItem(item, facing);
+        if (state == null || state.isAir()) {
+            return false;
+        }
+        BlockState old = grid[index];
+        if (old.equals(state)) {
+            return false;
+        }
+        if (!player.isCreative() && !Crafting.consume(player, item)) {
+            return false;
+        }
+        if (!old.isAir()) {
+            refund(player, old);
+        }
+        grid[index] = state;
         return true;
     }
 
@@ -388,26 +422,6 @@ public final class ModNetwork {
     }
 
     public static Item itemFor(Part part) {
-        return switch (part) {
-            case DUST -> Items.REDSTONE;
-            case TORCH -> Items.REDSTONE_TORCH;
-            case REPEATER -> Items.REPEATER;
-            case COMPARATOR -> Items.COMPARATOR;
-            case REDSTONE_BLOCK -> Items.REDSTONE_BLOCK;
-            case LEVER -> Items.LEVER;
-            case BUTTON -> Items.STONE_BUTTON;
-            case SOLID -> Items.STONE;
-            case LAMP -> Items.REDSTONE_LAMP;
-            case OBSERVER -> Items.OBSERVER;
-            case NOTE_BLOCK -> Items.NOTE_BLOCK;
-            case GLASS -> Items.GLASS;
-            case HOPPER -> Items.HOPPER;
-            case FURNACE -> Items.FURNACE;
-            case BLAST_FURNACE -> Items.BLAST_FURNACE;
-            case SMOKER -> Items.SMOKER;
-            case BREWING_STAND -> Items.BREWING_STAND;
-            case CRAFTER -> Items.CRAFTER;
-            default -> null;
-        };
+        return BoardStates.itemFor(part);
     }
 }

@@ -1,54 +1,89 @@
 package com.retiredroca.redstonepcbs.client;
 
-import com.retiredroca.redstonepcbs.chip.Part;
+import com.retiredroca.redstonepcbs.block.BoardStates;
 
-import net.minecraft.network.chat.Component;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
-/** Vanilla item icons for the chip parts, shared by the palette and the editor grid. */
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Palette metadata for the editor: the creative tabs we mirror and the item icons for the chip parts.
+ * The palette itself is sourced from the live creative-tab contents (see {@link #entries}), so it
+ * tracks what the game and other mods actually offer.
+ */
 public final class PcbIcons {
-    public static final Part[] PALETTE = {
-            Part.SOLID, Part.DUST, Part.TORCH, Part.REPEATER, Part.COMPARATOR, Part.REDSTONE_BLOCK,
-            Part.LEVER, Part.BUTTON, Part.LAMP, Part.OBSERVER, Part.NOTE_BLOCK, Part.GLASS, Part.HOPPER,
-            Part.FURNACE, Part.BLAST_FURNACE, Part.SMOKER, Part.BREWING_STAND, Part.CRAFTER
-    };
+    /**
+     * Palette categories, mirroring the creative inventory's tabs (narrowed to what the board needs:
+     * no tools/combat/food/spawn eggs/operator tabs). {@link #SEARCH} is a query tab, not a category.
+     */
+    public enum Tab {
+        SEARCH("Search", Items.COMPASS, null),
+        BUILDING_BLOCKS("Building Blocks", Items.BRICKS, CreativeModeTabs.BUILDING_BLOCKS),
+        REDSTONE("Redstone", Items.REDSTONE, CreativeModeTabs.REDSTONE_BLOCKS),
+        FUNCTIONAL("Functional", Items.OAK_SIGN, CreativeModeTabs.FUNCTIONAL_BLOCKS),
+        INGREDIENTS("Ingredients", Items.IRON_INGOT, CreativeModeTabs.INGREDIENTS);
+
+        public final String label;
+        public final Item icon;
+        public final ResourceKey<CreativeModeTab> creativeTab;
+
+        Tab(String label, Item icon, ResourceKey<CreativeModeTab> creativeTab) {
+            this.label = label;
+            this.icon = icon;
+            this.creativeTab = creativeTab;
+        }
+    }
+
+    public static final Tab[] TABS = Tab.values();
+
+    /** One placeable palette entry: the item to place and its display stack. */
+    public record Entry(Item item, ItemStack stack) {}
+
+    /**
+     * The items to show under {@code tab}: the creative tab's contents filtered to placeable items.
+     * {@link Tab#SEARCH} aggregates every category tab.
+     */
+    public static List<Entry> entries(Tab tab) {
+        List<Entry> out = new ArrayList<>();
+        if (tab == Tab.SEARCH) {
+            for (Tab other : TABS) {
+                if (other != Tab.SEARCH) {
+                    appendTab(out, other);
+                }
+            }
+        } else {
+            appendTab(out, tab);
+        }
+        return out;
+    }
+
+    private static void appendTab(List<Entry> out, Tab tab) {
+        for (ItemStack stack : CreativeTabItems.displayItems(tab.creativeTab)) {
+            if (stack.isEmpty()) {
+                continue;
+            }
+            Item item = stack.getItem();
+            if (!BoardStates.isPlaceable(item)) {
+                continue;
+            }
+            if (out.stream().anyMatch(e -> e.item() == item)) {
+                continue;
+            }
+            out.add(new Entry(item, stack));
+        }
+    }
 
     private PcbIcons() {}
 
-    public static Item itemFor(Part part) {
-        return switch (part) {
-            case SOLID -> Items.STONE;
-            case DUST -> Items.REDSTONE;
-            case TORCH -> Items.REDSTONE_TORCH;
-            case REPEATER -> Items.REPEATER;
-            case COMPARATOR -> Items.COMPARATOR;
-            case REDSTONE_BLOCK -> Items.REDSTONE_BLOCK;
-            case LEVER -> Items.LEVER;
-            case BUTTON -> Items.STONE_BUTTON;
-            case LAMP -> Items.REDSTONE_LAMP;
-            case OBSERVER -> Items.OBSERVER;
-            case NOTE_BLOCK -> Items.NOTE_BLOCK;
-            case GLASS -> Items.GLASS;
-            case HOPPER -> Items.HOPPER;
-            case FURNACE -> Items.FURNACE;
-            case BLAST_FURNACE -> Items.BLAST_FURNACE;
-            case SMOKER -> Items.SMOKER;
-            case BREWING_STAND -> Items.BREWING_STAND;
-            case CRAFTER -> Items.CRAFTER;
-            default -> Items.AIR;
-        };
-    }
-
-    public static ItemStack stackFor(Part part) {
-        Item item = itemFor(part);
-        return item == Items.AIR ? ItemStack.EMPTY : new ItemStack(item);
-    }
-
-    /** The vanilla display name, e.g. "Redstone Dust". */
-    public static Component nameOf(Part part) {
-        ItemStack stack = stackFor(part);
-        return stack.isEmpty() ? Component.literal(part.name()) : stack.getHoverName();
+    /** The registry id of an item, as sent to the server for a place action. */
+    public static String idOf(Item item) {
+        return BuiltInRegistries.ITEM.getKey(item).toString();
     }
 }

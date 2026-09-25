@@ -28,7 +28,6 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -104,11 +103,9 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             return;
         }
         BoardChunks chunks = BoardChunks.get(pcbLevel);
-        boolean allocated = false;
         if (boardChunk == null) {
             BoardChunks.Slot slot = chunks.allocate(pcbLevel);
             boardChunk = slot.chunk();
-            allocated = true;
             LOGGER.info("PCB {}: allocated board region {} (base Y {})",
                     worldPosition, boardChunk, BoardChunks.baseY(pcbLevel));
             setChanged();
@@ -116,37 +113,16 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (!regionCleaned) {
             regionCleaned = true;
             BoardSpace space = new BoardSpace(pcbLevel, boardChunk, BoardChunks.baseY(pcbLevel));
-            if (allocated) {
-                // The dimension is void, but clear the region anyway so a fresh board starts empty.
-                space.clear();
-            } else {
-                removeForeignBlocks(space);
-            }
+            // The board dimension is void, so a fresh board is already empty; nothing to wipe. The
+            // grid stores arbitrary BlockStates now, so there is no foreign-block sweep either.
             // The board floor sits one layer below the grid (relativeY -1), so it neither consumes
-            // a cell of the usable 16x16x16 volume nor is ever swept by clear/removeForeignBlocks
-            // (those only walk grid cells). Idempotent, so re-ensuring on reload is harmless and
-            // old saves without a floor get one.
+            // a cell of the usable 16x16x16 volume nor is ever swept by clear (which only walks grid
+            // cells). Idempotent, so re-ensuring on reload is harmless and old saves get one.
             space.ensureFloor();
         }
         if (pendingGrid != null) {
             GridSerializer.apply(pendingGrid, new BoardSpace(pcbLevel, boardChunk, BoardChunks.baseY(pcbLevel)));
             pendingGrid = null;
-        }
-    }
-
-    /** Drops generated terrain left inside the region by builds that did not wipe it on placement. */
-    private void removeForeignBlocks(BoardSpace space) {
-        int removed = 0;
-        for (int i = 0; i < GridSerializer.COUNT; i++) {
-            BlockState state = space.get(i);
-            if (!state.isAir() && !BoardStates.isBoardBlock(state)) {
-                space.set(BoardSpace.xOf(i), BoardSpace.yOf(i), BoardSpace.zOf(i),
-                        net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-                removed++;
-            }
-        }
-        if (removed > 0) {
-            LOGGER.info("PCB {}: cleared {} generated block(s) from the board region", worldPosition, removed);
         }
     }
 
@@ -334,7 +310,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         List<SlotRef> list = new ArrayList<>();
         for (Dir face : Dir.VALUES) {
             Direction direction = Directions.toMinecraft(face);
-            for (Cell c : edgeLayer(cells, face)) {
+            for (Cell c : edgePorts(space, cells, face)) {
                 for (int slot : slotsFor(direction, c.container())) {
                     list.add(new SlotRef(face, c.container(), slot));
                 }
@@ -347,46 +323,68 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         boundarySlots = list;
     }
 
-    /** The containers whose editor cell lies on {@code face}'s edge layer, nearest that edge per line. */
-    private static List<Cell> edgeLayer(List<Cell> cells, Dir face) {
-        Map<Long, Cell> best = new HashMap<>();
-        Map<Long, Integer> depth = new HashMap<>();
+    /**
+     * The containers reachable from {@code face}, nearest the face first. A container is reachable
+     * only when every cell between it and that face's edge layer is air: a solid (or any other) part
+     * placed on the edge layer shields everything behind it, exactly like solid-block item transport
+     * in the world. Because a reachable container is itself non-air, only the nearest container on a
+     * given line can ever qualify, so no per-line dedupe is needed.
+     */
+    private static List<Cell> edgePorts(BoardSpace space, List<Cell> cells, Dir face) {
+        List<Cell> ports = new ArrayList<>();
         for (Cell c : cells) {
-            long key;
-            int d;
-            switch (face) {
-                case UP -> {
-                    key = key(c.x(), c.z());
-                    d = SIZE - 1 - c.y();
+            int depth = switch (face) {
+                case DOWN -> c.y();
+                case UP -> SIZE - 1 - c.y();
+                case NORTH -> c.z();
+                case SOUTH -> SIZE - 1 - c.z();
+                case WEST -> c.x();
+                case EAST -> SIZE - 1 - c.x();
+            };
+            boolean clear = true;
+            for (int d = 0; d < depth && clear; d++) {
+                int x;
+                int y;
+                int z;
+                switch (face) {
+                    case DOWN -> {
+                        x = c.x();
+                        y = d;
+                        z = c.z();
+                    }
+                    case UP -> {
+                        x = c.x();
+                        y = SIZE - 1 - d;
+                        z = c.z();
+                    }
+                    case NORTH -> {
+                        x = c.x();
+                        y = c.y();
+                        z = d;
+                    }
+                    case SOUTH -> {
+                        x = c.x();
+                        y = c.y();
+                        z = SIZE - 1 - d;
+                    }
+                    case WEST -> {
+                        x = d;
+                        y = c.y();
+                        z = c.z();
+                    }
+                    default -> {
+                        x = SIZE - 1 - d;
+                        y = c.y();
+                        z = c.z();
+                    }
                 }
-                case DOWN -> {
-                    key = key(c.x(), c.z());
-                    d = c.y();
-                }
-                case NORTH -> {
-                    key = key(c.x(), c.y());
-                    d = c.z();
-                }
-                case SOUTH -> {
-                    key = key(c.x(), c.y());
-                    d = SIZE - 1 - c.z();
-                }
-                case WEST -> {
-                    key = key(c.y(), c.z());
-                    d = c.x();
-                }
-                default -> {
-                    key = key(c.y(), c.z());
-                    d = SIZE - 1 - c.x();
-                }
+                clear = space.get(x, y, z).isAir();
             }
-            Integer prev = depth.get(key);
-            if (prev == null || d < prev) {
-                depth.put(key, d);
-                best.put(key, c);
+            if (clear) {
+                ports.add(c);
             }
         }
-        return new ArrayList<>(best.values());
+        return ports;
     }
 
     /**
@@ -406,10 +404,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             all[i] = i;
         }
         return all;
-    }
-
-    private static long key(int a, int b) {
-        return ((long) a << 8) | (b & 0xFF);
     }
 
     private SlotRef slot(int index) {
@@ -443,13 +437,23 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     @Override
     public ItemStack removeItem(int slot, int amount) {
         SlotRef ref = slot(slot);
-        return ref == null ? ItemStack.EMPTY : ref.container().removeItem(ref.slot(), amount);
+        if (ref == null) {
+            return ItemStack.EMPTY;
+        }
+        ItemStack result = ref.container().removeItem(ref.slot(), amount);
+        ref.container().setChanged();
+        return result;
     }
 
     @Override
     public ItemStack removeItemNoUpdate(int slot) {
         SlotRef ref = slot(slot);
-        return ref == null ? ItemStack.EMPTY : ref.container().removeItemNoUpdate(ref.slot());
+        if (ref == null) {
+            return ItemStack.EMPTY;
+        }
+        ItemStack result = ref.container().removeItemNoUpdate(ref.slot());
+        ref.container().setChanged();
+        return result;
     }
 
     @Override
@@ -457,6 +461,13 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         SlotRef ref = slot(slot);
         if (ref != null) {
             ref.container().setItem(ref.slot(), stack);
+            // Vanilla's hopper transport calls setChanged() on the *receiving* container (this
+            // gateway, in the overworld), so the in-board container's own setChanged() -> comparator /
+            // neighbour updates never run in the board dimension. Without this, a comparator reading an
+            // in-board container does not update when items cross the gateway on the loaders whose item
+            // path routes through this mutator (Fabric), while NeoForge's capability wrapper happens to
+            // hit it. Propagate explicitly so the board dimension sees the change on both loaders.
+            ref.container().setChanged();
         }
     }
 

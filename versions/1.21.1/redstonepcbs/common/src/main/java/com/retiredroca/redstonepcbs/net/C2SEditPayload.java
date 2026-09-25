@@ -31,6 +31,8 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     public static final int ACTION_PULSE_LAYER = 12;
     public static final int ACTION_TOGGLE_INPUT = 13;
     public static final int ACTION_TOGGLE_OUTPUT = 14;
+    /** Place an arbitrary item: {@code text} is the item registry id, {@code packed} packs the facing. */
+    public static final int ACTION_PLACE = 15;
 
     public static final int FLAG_SUBTRACT = 1;
 
@@ -73,6 +75,17 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     /** Filter action: {@code text} is the item-id pattern for the hopper at {@code index}. */
     public static C2SEditPayload filter(BlockPos pos, int index, String text) {
         return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_SET_FILTER, index, 0, text);
+    }
+
+    /** Place action: {@code text} is the item registry id, {@code packed} packs the facing (bits 8-15). */
+    public static C2SEditPayload place(BlockPos pos, int index, String itemId, int facing, int flags) {
+        return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_PLACE, index,
+                (facing & 0xFF) << 8 | (flags & 0xFF) << 16, itemId);
+    }
+
+    public static C2SEditPayload placeItem(int slot, int index, String itemId, int facing, int flags) {
+        return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_PLACE, index,
+                (facing & 0xFF) << 8 | (flags & 0xFF) << 16, itemId);
     }
 
     public int part() {

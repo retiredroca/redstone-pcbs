@@ -5,6 +5,11 @@ import com.retiredroca.redstonepcbs.chip.Part;
 
 import net.minecraft.core.Direction;
 import net.minecraft.core.FrontAndTop;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ComparatorBlock;
 import net.minecraft.world.level.block.HopperBlock;
@@ -15,6 +20,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ComparatorMode;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
 
 /**
  * The board's block palette: maps a {@link Part} plus a facing to the vanilla {@link BlockState} that
@@ -58,28 +64,78 @@ public final class BoardStates {
         };
     }
 
-    /** Whether a state belongs to the board palette (or is air); anything else is foreign terrain. */
-    public static boolean isBoardBlock(BlockState state) {
-        return state.isAir()
-                || state.is(Blocks.STONE)
-                || state.is(Blocks.GLASS)
-                || state.is(Blocks.REDSTONE_BLOCK)
-                || state.is(Blocks.NOTE_BLOCK)
-                || state.is(Blocks.REDSTONE_LAMP)
-                || state.is(Blocks.REDSTONE_WIRE)
-                || state.is(Blocks.REDSTONE_TORCH)
-                || state.is(Blocks.REDSTONE_WALL_TORCH)
-                || state.is(Blocks.REPEATER)
-                || state.is(Blocks.COMPARATOR)
-                || state.is(Blocks.OBSERVER)
-                || state.is(Blocks.HOPPER)
-                || state.is(Blocks.LEVER)
-                || state.is(Blocks.STONE_BUTTON)
-                || state.is(Blocks.FURNACE)
-                || state.is(Blocks.BLAST_FURNACE)
-                || state.is(Blocks.SMOKER)
-                || state.is(Blocks.BREWING_STAND)
-                || state.is(Blocks.CRAFTER);
+    /** The vanilla item that places {@code part}, or {@code null} for air/unknown. */
+    public static Item itemFor(Part part) {
+        return switch (part) {
+            case DUST -> Items.REDSTONE;
+            case TORCH -> Items.REDSTONE_TORCH;
+            case REPEATER -> Items.REPEATER;
+            case COMPARATOR -> Items.COMPARATOR;
+            case REDSTONE_BLOCK -> Items.REDSTONE_BLOCK;
+            case LEVER -> Items.LEVER;
+            case BUTTON -> Items.STONE_BUTTON;
+            case SOLID -> Items.STONE;
+            case LAMP -> Items.REDSTONE_LAMP;
+            case OBSERVER -> Items.OBSERVER;
+            case NOTE_BLOCK -> Items.NOTE_BLOCK;
+            case GLASS -> Items.GLASS;
+            case HOPPER -> Items.HOPPER;
+            case FURNACE -> Items.FURNACE;
+            case BLAST_FURNACE -> Items.BLAST_FURNACE;
+            case SMOKER -> Items.SMOKER;
+            case BREWING_STAND -> Items.BREWING_STAND;
+            case CRAFTER -> Items.CRAFTER;
+            default -> null;
+        };
+    }
+
+    /** The palette part an item corresponds to, or {@code null} when it is not a known part. */
+    public static Part partFor(Item item) {
+        for (Part part : Part.VALUES) {
+            if (itemFor(part) == item) {
+                return part;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The state to place for {@code item} facing {@code facing}, or {@code null} when the item cannot
+     * be placed on the board. A known part reuses its exact {@link #initial} state (so torch walls,
+     * crafter orientation and lever attachment all survive); any other {@link BlockItem} is placed as
+     * its default state with the facing applied where the block supports it.
+     */
+    public static BlockState forItem(Item item, Dir facing) {
+        Part part = partFor(item);
+        if (part != null && part != Part.AIR) {
+            return initial(part, facing);
+        }
+        if (!(item instanceof BlockItem blockItem)) {
+            return null;
+        }
+        BlockState state = blockItem.getBlock().defaultBlockState();
+        Direction direction = Directions.toMinecraft(facing);
+        DirectionProperty facingProperty = facingProperty(state);
+        if (facingProperty != null && facingProperty.getPossibleValues().contains(direction)) {
+            state = state.setValue(facingProperty, direction);
+        }
+        return state;
+    }
+
+    /** Whether {@code item} can be placed on the board (a known part, or any block item). */
+    public static boolean isPlaceable(Item item) {
+        return item != null && (partFor(item) != null || item instanceof BlockItem);
+    }
+
+    /** The first facing property a block state exposes (FACING, then HORIZONTAL_FACING), or null. */
+    private static DirectionProperty facingProperty(BlockState state) {
+        if (state.hasProperty(BlockStateProperties.FACING)) {
+            return BlockStateProperties.FACING;
+        }
+        if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            return BlockStateProperties.HORIZONTAL_FACING;
+        }
+        return null;
     }
 
     /** The palette part that maps to a placed state, or AIR. Used by the editor's hover/selection. */
