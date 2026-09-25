@@ -47,6 +47,7 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import org.lwjgl.opengl.GL11;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -292,7 +293,7 @@ public class PcbEditorScreen extends Screen {
         if (importOpen) {
             graphics.fill(0, 0, this.width, this.height, 0xC0000000);
             renderImportPanel(graphics, mouseX, mouseY);
-            // super.render() flushes any queued tooltip last, so it draws above everything above.
+            // Deferred tooltips are flushed by Screen.renderWithTooltip after render() returns.
             super.render(graphics, mouseX, mouseY, partialTick);
             return;
         }
@@ -307,14 +308,16 @@ public class PcbEditorScreen extends Screen {
         raycast(mouseX, mouseY);
         render3D(graphics);
         renderPanel(graphics, mouseX, mouseY);
-        // Draw the tooltip ourselves, last, so the raw GL state from render3D cannot put it behind.
-        drawTooltip(graphics, mouseX, mouseY);
+        // Queued rather than drawn here, so renderWithTooltip emits it after the whole screen render.
+        drawTooltip();
     }
 
-    private void drawTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+    private void drawTooltip() {
         Component tip = buildTooltip();
-        if (tip != null) {
-            graphics.renderTooltip(this.font, tip, mouseX, mouseY);
+        if (tip == null) {
+            clearTooltipForNextRenderPass();
+        } else {
+            setTooltipForNextRenderPass(tip);
         }
     }
 
@@ -386,6 +389,7 @@ public class PcbEditorScreen extends Screen {
         // Reset the depth buffer so the wireframe, panel and tooltips draw over the block models.
         graphics.flush();
         RenderSystem.clearDepth(1.0);
+        RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, false);
         RenderSystem.disableDepthTest();
         drawBoundsAndGizmo(graphics);
         graphics.disableScissor();
@@ -1158,7 +1162,7 @@ public class PcbEditorScreen extends Screen {
             graphics.fill(tx, tabY, tx + tabSize, tabY + tabSize, bg);
             graphics.fill(tx + 1, tabY + 1, tx + tabSize - 1, tabY + tabSize - 1,
                     active ? 0xFF5A5A5A : 0xFF212121);
-            drawItem(graphics, new ItemStack(tab.icon), tx + 1, tabY + 1, 16);
+            drawItem(graphics, new ItemStack(tab.icon), tx + 1, tabY + 1, tabSize - 2);
             tabRects.add(new TabRect(tab, tx, tabY, tabSize, tabSize));
             tx += tabSize + 2;
         }
@@ -1552,6 +1556,12 @@ public class PcbEditorScreen extends Screen {
 
     /** The tooltip to show for whatever is under the cursor, or {@code null} for none. */
     private Component buildTooltip() {
+        for (TabRect tab : tabRects) {
+            if (lastMouseX >= tab.x() && lastMouseX < tab.x() + tab.w()
+                    && lastMouseY >= tab.y() && lastMouseY < tab.y() + tab.h()) {
+                return Component.literal(tab.tab().label);
+            }
+        }
         for (PaletteSlot slot : paletteSlots) {
             if (slot.contains(lastMouseX, lastMouseY)) {
                 return slot.entry().stack().getHoverName();
