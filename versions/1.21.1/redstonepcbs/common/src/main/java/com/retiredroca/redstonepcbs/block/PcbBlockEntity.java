@@ -62,6 +62,12 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     /** Redstone ports: grid cell index -> the port bridging that cell to a PCB face. */
     private final java.util.Map<Integer, PortLink> ports = new java.util.LinkedHashMap<>();
 
+    /**
+     * The level this board drives out of each world face, indexed by {@link Dir#ordinal()}. Written
+     * once per server tick by {@link #publishPorts()} and read by {@link PcbBlock#getSignal}.
+     */
+    private final int[] outLevels = new int[Dir.VALUES.length];
+
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("redstonepcbs");
 
     public PcbBlockEntity(BlockPos pos, BlockState state) {
@@ -662,15 +668,67 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             if (board != null) {
                 SignalBridge.publish(board, java.util.Map.of());
             }
+            java.util.Arrays.fill(outLevels, 0);
             return;
         }
         java.util.Map<BlockPos, SignalBridge.Served> byPos = new java.util.LinkedHashMap<>();
+        // Reset before re-sampling: a port removed since the last tick must not leave its level
+        // latched on the face, or the board would keep driving a face nothing is attached to.
+        java.util.Arrays.fill(outLevels, 0);
         for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
             PortLink port = e.getValue();
             byPos.put(space.pos(e.getKey()),
                     new SignalBridge.Served(port, port.isInput() ? worldLevelOn(port.face()) : 0));
+            if (port.isOutput()) {
+                sampleOutput(port, space.pos(e.getKey()));
+            }
         }
         SignalBridge.publish(board, byPos);
+    }
+
+    /**
+     * Samples the board's level for an output port and holds it as this board's level for the port's
+     * world face, which {@link PcbBlock#getSignal} then serves.
+     *
+     * <p>The level is taken along the port's own side axis rather than along the face, which is the
+     * exact mirror of the input path: an input serves the level arriving on the face onto the port's
+     * side, and an output takes the level leaving on the port's side and presents it on the face. The
+     * two therefore read the same pin of the same component, which is what makes a board reading its
+     * own output a no-op instead of a feedback loop.
+     *
+     * <p>Direction convention, from vanilla's own {@code SignalGetter.getDirectSignalTo}, which asks
+     * {@code getDirectSignal(pos.below(), DOWN)} for the signal arriving at {@code pos} from below: the
+     * argument names the side the <em>source</em> is on, and the returned value is the emission in the
+     * opposite direction. So emission toward {@code side} is {@code getSignal(cell, side.getOpposite())}.
+     */
+    private void sampleOutput(PortLink port, BlockPos cellPos) {
+        Direction side = Directions.toMinecraft(port.side());
+        int level = Math.clamp(pcbLevel().getSignal(cellPos, side.getOpposite()), 0, 15);
+        // Indexed by Direction.ordinal() on both the write here and the read in outputLevel, never by
+        // Dir.ordinal(). The two enums happen to be declared in the same order today, but they are
+        // distinct types and nothing enforces that: indexing by one and reading with the other would
+        // send the level out of the wrong face with no compile error and no failing test if either
+        // order ever changed. Converting here means only one enum is ever used as an index.
+        int face = Directions.toMinecraft(port.face()).ordinal();
+        if (outLevels[face] != 0 && outLevels[face] != level) {
+            // The editor only lets one port own a face, so this means two disagree. Take the lower
+            // cell index deterministically rather than letting map order decide, and say so.
+            LOGGER.warn("PCB {}: face {} has two output ports ({} and {}) at different levels; "
+                            + "keeping the first by cell index",
+                    worldPosition, port.face(), outLevels[face], level);
+        }
+        if (outLevels[face] == 0) {
+            outLevels[face] = level;
+        }
+    }
+
+    /**
+     * The level this board drives out of the given world face, sampled once per server tick by
+     * {@link #publishPorts()}. Vanilla reads this through {@link PcbBlock#getSignal}, so a value
+     * cached here is at most one tick old, the same latency a comparator reading its container has.
+     */
+    public int outputLevel(Direction face) {
+        return outLevels[face.ordinal()];
     }
 
     /**

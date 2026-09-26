@@ -127,17 +127,50 @@ public class PcbBlock extends Block implements EntityBlock {
     }
 
     /**
-     * The PCB block neither emits nor receives redstone: the board's circuit is self-contained. To
-     * move a signal across the boundary, move items through the item gateway instead and let a
-     * vanilla comparator turn the container's fill into a level on the other side.
+     * The level this board drives out of the given world face, or 0 where no output port owns it.
+     *
+     * <p>Direction convention: vanilla's {@code SignalGetter.getDirectSignalTo} asks
+     * {@code getDirectSignal(pos.below(), DOWN)} for the signal arriving at {@code pos} from below, so
+     * the argument names the side the <em>source</em> is on and the returned value is the emission in
+     * the opposite direction. A reader sitting on face {@code direction} therefore asks with that same
+     * {@code direction}, which is what receives the port's level here.
+     *
+     * <p>The value is sampled once per server tick by the block entity, so it is at most one tick stale
+     * — the same latency a vanilla comparator reading its container has.
      */
     @Override
     public int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
+        if (level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
+            return be.outputLevel(direction);
+        }
         return 0;
     }
 
+    /**
+     * Serves the same level as {@link #getSignal}, so a diode reading this board sees the same number
+     * as a wire or comparator reading it. The board's own circuit is unaffected: this block is in the
+     * world, not in the board dimension, so nothing inside the board can observe it.
+     */
     @Override
     public int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
-        return 0;
+        return getSignal(state, level, pos, direction);
+    }
+
+    /**
+     * Reports this block as a signal source so vanilla actually consults the two methods above.
+     *
+     * <p>This is load-bearing rather than decorative: {@code SignalGetter.getControlInputSignal}
+     * short-circuits to {@code getDirectSignal} only when {@code isSignalSource()} is true
+     * ({@code SignalGetter.java:80}), and a diode takes its control input from that path, so without
+     * this a repeater or comparator beside a board would read 0 no matter what the port held.
+     *
+     * <p>Returning true unconditionally does not make an unported board emit: every one of vanilla's
+     * four consumers ({@code SignalGetter.java:80}, {@code NaturalSpawner}, {@code RailBlock}, and
+     * {@code RedStoneWireBlock}'s observer case) gates its result on the level these methods return,
+     * which is 0 while no output port owns a face. Verified in the 1.21.1 sources rather than assumed.
+     */
+    @Override
+    public boolean isSignalSource(BlockState state) {
+        return true;
     }
 }
