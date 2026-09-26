@@ -95,13 +95,82 @@ public final class BoardSpace {
         return level.getChunk(chunk.x, chunk.z);
     }
 
-    /** Clears every cell to air. */
+    /**
+     * Clears every cell to air, then lets the world re-derive the shapes it left behind.
+     *
+     * <p>Clearing a cell only re-shapes a neighbouring wire if that cell was really placed; see
+     * {@link #refreshShapes(int[])}. A wire can otherwise be left claiming a join to air, which is a
+     * stale state on a redstone board and not merely cosmetic.
+     */
     public void clear() {
+        java.util.List<Integer> touched = new java.util.ArrayList<>();
         for (int i = 0; i < SIZE * SIZE * SIZE; i++) {
             if (!get(i).isAir()) {
                 level.setBlock(pos(i), Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+                touched.add(i);
             }
         }
+        refreshShapes(touched);
+    }
+
+    /**
+     * Re-derives the shape of every cell in the whole grid and of their neighbours, and reports how many
+     * cells' shapes actually changed. Used once per region to repair a board saved while stale
+     * connections were possible, and to make the repair observable rather than silent.
+     */
+    public int refreshAllShapes() {
+        java.util.List<Integer> all = new java.util.ArrayList<>(SIZE * SIZE * SIZE);
+        for (int i = 0; i < SIZE * SIZE * SIZE; i++) {
+            all.add(i);
+        }
+        return refreshShapes(all);
+    }
+
+    /**
+     * Re-derives the shape of every cell in {@code changed} and of its six neighbours, by invoking
+     * vanilla's own shape pass rather than re-deriving anything by hand.
+     *
+     * <p>Why this is needed: a wire's connections live in its own blockstate, and vanilla only
+     * recomputes them when a <em>real neighbouring block changes</em> — a wire's
+     * {@code neighborChanged} recomputes {@code POWER} and never shape. So removing a block that a wire
+     * was joined to leaves the wire still claiming the join, and because a board's grid is snapshotted
+     * from the world and written back, that stale state is then round-tripped and never corrected.
+     *
+     * <p>{@code updateNeighbourShapes} is the same call {@code Level.setBlock} makes in its shape pass,
+     * and {@code updateIndirectNeighbourShapes} the one it makes for diagonals — which is what a wire
+     * uses for its sloped connections. Calling vanilla's own pass keeps the result identical to what
+     * the world would have produced, rather than a reimplementation that can disagree with it.
+     */
+    public int refreshShapes(java.util.Collection<Integer> changed) {
+        if (changed.isEmpty()) {
+            return 0;
+        }
+        java.util.Set<Integer> seeds = new java.util.LinkedHashSet<>();
+        for (int index : changed) {
+            if (index < 0 || index >= SIZE * SIZE * SIZE) {
+                continue;
+            }
+            seeds.add(index);
+            for (com.retiredroca.redstonepcbs.chip.Dir dir : com.retiredroca.redstonepcbs.chip.Dir.VALUES) {
+                int neighbour = com.retiredroca.redstonepcbs.chip.CellIndex.neighbour(index, dir);
+                if (neighbour >= 0) {
+                    seeds.add(neighbour);
+                }
+            }
+        }
+        int reshaped = 0;
+        for (int index : seeds) {
+            BlockPos p = pos(index);
+            BlockState before = level.getBlockState(p);
+            // The recursive form decrements the shape recursion budget, so a shape change that cascades
+            // further reaches its own neighbours exactly as it would have during a placement.
+            before.updateNeighbourShapes(level, p, 0);
+            before.updateIndirectNeighbourShapes(level, p, 0);
+            if (!before.equals(level.getBlockState(p))) {
+                reshaped++;
+            }
+        }
+        return reshaped;
     }
 
     /**

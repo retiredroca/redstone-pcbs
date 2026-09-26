@@ -123,6 +123,15 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             // a cell of the usable 16x16x16 volume nor is ever swept by clear (which only walks grid
             // cells). Idempotent, so re-ensuring on reload is harmless and old saves get one.
             space.ensureFloor();
+            // Repair shapes in boards saved before this existed, and on any reload. A wire keeps a stale
+            // connection when the block it was joined to was merely cleared, and because the grid is
+            // snapshotted from the world and written back, that stale state survives a save/load cycle
+            // untouched. Seeding every cell re-derives it through vanilla's own shape pass. Once per
+            // region, not per tick: ensureRegion is called every tick, and the work is idempotent.
+            int repaired = space.refreshAllShapes();
+            if (repaired > 0) {
+                LOGGER.info("PCB {}: re-derived {} stale block shape(s) on load", worldPosition, repaired);
+            }
         }
         if (pendingGrid != null) {
             GridSerializer.apply(pendingGrid, new BoardSpace(pcbLevel, boardChunk, BoardChunks.baseY(pcbLevel)));

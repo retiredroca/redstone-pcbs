@@ -103,13 +103,21 @@ public final class GridSerializer {
      */
     public static void apply(BlockState[] grid, BoardSpace space) {
         ServerLevel level = space.level();
+        java.util.List<Integer> touched = new java.util.ArrayList<>();
         for (int i = 0; i < COUNT; i++) {
             BlockState state = grid[i] == null ? Blocks.AIR.defaultBlockState() : grid[i];
             BlockPos pos = space.pos(i);
             if (!state.equals(level.getBlockState(pos))) {
                 level.setBlock(pos, state, Block.UPDATE_NEIGHBORS | Block.UPDATE_CLIENTS);
+                touched.add(i);
             }
         }
+        // A placed cell re-shapes its neighbours through the shape pass in setBlock, but a wire keeps a
+        // stale connection when the cell it was joined to is merely cleared, because vanilla recomputes
+        // a wire's power on neighbourChanged and never its shape. Left alone that stale state is then
+        // snapshotted back into the grid and never corrected, so re-derive it here through vanilla's own
+        // pass. See BoardSpace#refreshShapes.
+        space.refreshShapes(touched);
     }
 
     private static byte[] pack(int[] cells) {
