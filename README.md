@@ -44,10 +44,6 @@ save-persistent redstone board inside a single block.
   it, and the editor names the cell that lost its tap. Taps persist on the block, travel with the PCB
   item, and are carried by saved and shared designs. Item gateways (below) remain a separate mechanism
   and are not affected by any of this.
-
-  > **Untested.** The obvious build for this - a half hopper clock on each side, feeding and draining
-  > containers across the gateway to steer the level - has not been built or tested. Treat it as a
-  > starting point to try, not a documented design.
 - **Saved designs** - the editor's Library panel keeps named circuits per player (stored with the
   world). A design's name is typed in the panel's name field; "Save" costs one paper in survival, and
   loading a design back onto a board consumes the matching items in survival. The per-player limit is
