@@ -33,14 +33,14 @@ public final class BlueprintFiles {
     }
 
     /** Exports a design and returns the file written. */
-    public static Path write(String name, byte[] grid, byte[] faces) throws IOException {
+    public static Path write(String name, byte[] grid, byte[] faces, byte[] ports) throws IOException {
         Path dir = folder();
         String base = sanitize(name);
         Path file = dir.resolve(base + ".json");
         for (int n = 1; Files.exists(file); n++) {
             file = dir.resolve(base + " (" + n + ").json");
         }
-        Files.writeString(file, GSON.toJson(new Blueprint(name, grid, faces).toJson()), StandardCharsets.UTF_8);
+        Files.writeString(file, GSON.toJson(new Blueprint(name, grid, faces, ports).toJson()), StandardCharsets.UTF_8);
         return file;
     }
 

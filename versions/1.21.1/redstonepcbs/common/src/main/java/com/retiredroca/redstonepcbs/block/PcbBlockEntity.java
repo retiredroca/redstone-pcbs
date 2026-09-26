@@ -636,7 +636,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
      * exactly the failure this project keeps paying for.
      */
     private BoardTaps sanitise(BoardTaps candidate) {
-        BlockState[] grid = grid();
+        // space() rather than grid(): grid() calls ensureRegion(), which will *allocate* a region, and
+        // allocating one part-way through deserialising a block entity is not something to do by accident.
+        BoardSpace space = space();
+        BlockState[] grid = space != null ? GridSerializer.snapshot(space) : null;
         BoardTaps result = candidate;
         for (PortFlow flow : PortFlow.VALUES) {
             int cell = candidate.cellOf(flow);
@@ -647,7 +650,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
                 LOGGER.warn("PCB {}: dropping the {} tap on cell {}, which is outside the grid",
                         worldPosition, flow, cell);
                 result = result.with(flow, BoardTaps.NONE);
-            } else if (!TapCell.isTap(grid[cell])) {
+            } else if (grid != null && !TapCell.isTap(grid[cell])) {
                 LOGGER.warn("PCB {}: dropping the {} tap on cell {}, which does not hold glass",
                         worldPosition, flow, cell);
                 result = result.with(flow, BoardTaps.NONE);
@@ -679,6 +682,14 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             lastNotified = 0;
             return;
         }
+        // Enforce the glass rule where it can be judged. Assignment already refuses a non-glass cell, but
+        // the player can break the glass afterwards, and a tap that then outlives its own rule is worse
+        // than one that stops and says so.
+        BoardTaps live = requireGlass(space);
+        if (!live.equals(taps)) {
+            taps = live;
+            setChanged();
+        }
         java.util.Map<BlockPos, SignalBridge.Served> served = new java.util.LinkedHashMap<>();
         outLevel = 0;
         int inCarried = 0;
@@ -703,6 +714,26 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (taps.hasIn()) {
             notifyPortCell(board, taps.cellOf(PortFlow.IN), space.pos(taps.cellOf(PortFlow.IN)), inCarried);
         }
+    }
+
+    /**
+     * Drops any tap whose cell no longer holds glass, naming it. Called from {@link #publishTaps()}, where
+     * the region is readable, because assignment-time and load-time checks both have a blind spot: a tap
+     * can outlive the glass that justified it.
+     */
+    private BoardTaps requireGlass(BoardSpace space) {
+        BlockState[] grid = GridSerializer.snapshot(space);
+        BoardTaps result = taps;
+        for (PortFlow flow : PortFlow.VALUES) {
+            int cell = taps.cellOf(flow);
+            if (cell == BoardTaps.NONE || TapCell.isTap(grid[cell])) {
+                continue;
+            }
+            LOGGER.warn("PCB {}: dropping the {} tap on cell {}, which no longer holds glass",
+                    worldPosition, flow, cell);
+            result = result.with(flow, BoardTaps.NONE);
+        }
+        return result;
     }
 
     /**
@@ -842,6 +873,11 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         lastLoggedPort = null;
         if (tag.contains("ports")) {
             byte[] data = tag.getByteArray("ports");
+            // Only the cell index is judged here. The board lives in another dimension, and at this point
+            // in a world load that region is usually not available -- so a glass check here reads an empty
+            // grid and throws away every tap, which is exactly what it did. The glass rule is enforced
+            // where the grid can actually be read: on assignment, and again in publishTaps once the region
+            // is up. A tap saved against a cell whose glass was removed is dropped there, with a warning.
             taps = sanitise(PortCodec.decode(data));
         }
         publishTaps();

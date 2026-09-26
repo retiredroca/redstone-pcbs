@@ -18,9 +18,9 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit
      * A saved design: its name, serialized grid, gateway attachment bytes, and the player who shared
      * it (empty for the owner's own designs).
      */
-    public record Design(String name, byte[] data, byte[] faces, String author) {
+    public record Design(String name, byte[] data, byte[] faces, byte[] ports, String author) {
         public Design(String name, byte[] data) {
-            this(name, data, new byte[0], "");
+            this(name, data, new byte[0], new byte[0], "");
         }
     }
 
@@ -37,6 +37,7 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit
                     ByteBufCodecs.STRING_UTF8.encode(buf, design.name());
                     ByteBufCodecs.BYTE_ARRAY.encode(buf, design.data());
                     ByteBufCodecs.BYTE_ARRAY.encode(buf, design.faces());
+                    ByteBufCodecs.BYTE_ARRAY.encode(buf, design.ports());
                     ByteBufCodecs.STRING_UTF8.encode(buf, design.author());
                 }
                 buf.writeInt(payload.players().size());
@@ -54,8 +55,9 @@ public record S2CLibraryPayload(List<Design> designs, boolean canSave, int limit
                     String name = ByteBufCodecs.STRING_UTF8.decode(buf);
                     byte[] data = ByteBufCodecs.BYTE_ARRAY.decode(buf);
                     byte[] faces = ByteBufCodecs.BYTE_ARRAY.decode(buf);
+                    byte[] ports = ByteBufCodecs.BYTE_ARRAY.decode(buf);
                     String author = ByteBufCodecs.STRING_UTF8.decode(buf);
-                    designs.add(new Design(name, data, faces, author));
+                    designs.add(new Design(name, data, faces, ports, author));
                 }
                 int playerCount = buf.readInt();
                 List<String> players = new ArrayList<>(playerCount);

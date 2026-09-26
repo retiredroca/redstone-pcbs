@@ -20,9 +20,9 @@ public class LibraryData extends SavedData {
      * player who shared it in (empty for the owner's own designs); both default to empty so designs
      * saved before either existed still load.
      */
-    public record Design(String name, byte[] data, byte[] faces, String author) {
+    public record Design(String name, byte[] data, byte[] faces, byte[] ports, String author) {
         public Design(String name, byte[] data) {
-            this(name, data, new byte[0], "");
+            this(name, data, new byte[0], new byte[0], "");
         }
     }
 
@@ -54,6 +54,7 @@ public class LibraryData extends SavedData {
                 designTag.putString("name", design.name());
                 designTag.putByteArray("data", design.data());
                 designTag.putByteArray("faces", design.faces());
+                designTag.putByteArray("ports", design.ports());
                 designTag.putString("author", design.author());
                 list.add(designTag);
             }
@@ -74,8 +75,11 @@ public class LibraryData extends SavedData {
             ListTag designs = player.getList("designs", Tag.TAG_COMPOUND);
             for (int j = 0; j < designs.size(); j++) {
                 CompoundTag design = designs.getCompound(j);
+                // getByteArray on a design saved before taps existed yields an empty array, so old
+                // library entries load as tap-free rather than failing.
                 list.add(new Design(design.getString("name"), design.getByteArray("data"),
-                        design.getByteArray("faces"), design.getString("author")));
+                        design.getByteArray("faces"), design.getByteArray("ports"),
+                        design.getString("author")));
             }
             data.byPlayer.put(id, list);
         }

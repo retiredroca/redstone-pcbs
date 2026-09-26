@@ -1248,9 +1248,9 @@ public class PcbEditorScreen extends Screen {
                 }
                 return true;
             }
-            case 80 -> { // P: cycle the hovered cell's tap, none -> in -> out -> none
+            case 80 -> { // P taps in, Shift+P taps out
                 if (index >= 0) {
-                    cyclePort(index);
+                    cyclePort(index, hasShiftDown() ? PortFlow.OUT : PortFlow.IN);
                 }
                 return true;
             }
@@ -1320,23 +1320,32 @@ public class PcbEditorScreen extends Screen {
     }
 
     /**
-     * Cycles the hovered cell's bridge: none -> in -> out -> none.
+     * Taps or untaps the hovered cell in the pressed direction.
      *
-     * <p>One bridge per board, so naming a different cell moves it and there is nothing to conflict with.
-     * Every cell in the grid is legal for either direction and nothing is ever refused: a tap is a source
-     * read by the components placed <em>around</em> it, so an empty cell beside a component is the normal
-     * case for an input and a cell holding a component is the normal case for an output. Both work from
-     * any cell, so there is no rule to refuse and no reason to explain one.
+     * <p>The direction is <em>chosen</em>, never inferred. An earlier version picked IN whenever no input
+     * existed, which made an output unreachable on its own: the only way to get one was to place an input
+     * first and then let a second press overwrite it, so a board could not be output-only. Choosing
+     * directly is also what makes one, the other, both and none each a single press away.
+     *
+     * <p>Per cell, one key: an untapped glass cell takes the pressed direction, a cell already tapped in
+     * that direction is cleared, and a cell tapped in the other direction is converted. The cell's
+     * contents are never changed -- a tap is a source the components <em>around</em> it read.
      */
-    private void cyclePort(int index) {
+    private void cyclePort(int index, PortFlow pressed) {
         if (index < 0 || index >= local.length) {
             return;
         }
-        PortFlow next;
         PortFlow held = taps.flowAt(index);
         if (held != null) {
-            // A tapped cell cycles off, and the other direction is untouched.
-            taps = taps.cleared(index);
+            if (held == pressed) {
+                // The same direction again clears, so either of one, the other, both and none are all
+                // reachable from one key. The opposite direction converts in place, which keeps the other
+                // direction's cell untouched either way.
+                taps = taps.cleared(index);
+            } else {
+                taps = taps.with(pressed, index);
+                setTapStatus(null);
+            }
             sendTaps();
             return;
         }
@@ -1346,13 +1355,12 @@ public class PcbEditorScreen extends Screen {
             setTapStatus(TapCell.requirement() + ", not " + local[index].getBlock().getName().getString());
             return;
         }
-        next = taps.hasIn() ? PortFlow.OUT : PortFlow.IN;
-        int displaced = taps.cellOf(next);
-        taps = taps.with(next, index);
+        int displaced = taps.cellOf(pressed);
+        taps = taps.with(pressed, index);
         if (displaced != BoardTaps.NONE) {
             // Moving is one press and is what re-pointing should be, but a tap can vanish silently, so
             // name the cell that lost one.
-            setTapStatus(next + " tap moved from " + cellLabel(displaced) + " to " + cellLabel(index));
+            setTapStatus(pressed + " tap moved from " + cellLabel(displaced) + " to " + cellLabel(index));
         } else {
             setTapStatus(null);
         }
@@ -1652,7 +1660,8 @@ public class PcbEditorScreen extends Screen {
         String[] help = {
             "L: place", "Shift+L: erase", "R-click: use", "R: rotate",
             "G: item gateway face",
-            "P: tap a glass cell (one in, one out)",
+            "P / Shift+P: tap a glass cell in / out",
+            "   (press again to clear, other key to flip)",
         };
         for (int i = 0; i < help.length; i++) {
             graphics.drawString(this.font, help[i], px, y + i * 10, 0x9F9F9F, false);
@@ -1867,7 +1876,7 @@ public class PcbEditorScreen extends Screen {
         }
         S2CLibraryPayload.Design design = designs.get(idx);
         try {
-            Path file = BlueprintFiles.write(design.name(), design.data(), design.faces());
+            Path file = BlueprintFiles.write(design.name(), design.data(), design.faces(), design.ports());
             libraryMessage = "Exported " + file.getFileName();
         } catch (Exception e) {
             libraryMessage = "Export failed";
@@ -1882,7 +1891,7 @@ public class PcbEditorScreen extends Screen {
             Blueprint blueprint = BlueprintFiles.read(importPaths.get(idx));
             RedstonePcbs.platform().sendToServer(new C2SLibraryPayload(kind, slot, pos,
                     C2SLibraryPayload.ACTION_IMPORT, 0, blueprint.name(), blueprint.grid(),
-                    blueprint.faces()));
+                    blueprint.faces(), blueprint.ports()));
             libraryMessage = "Importing " + blueprint.name() + "...";
             importOpen = false;
         } catch (Exception e) {

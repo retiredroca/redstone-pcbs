@@ -452,7 +452,7 @@ public final class ModNetwork {
         List<S2CLibraryPayload.Design> designs = new ArrayList<>(saved.size());
         for (LibraryData.Design design : saved) {
             designs.add(new S2CLibraryPayload.Design(design.name(), design.data(), design.faces(),
-                    design.author()));
+                    design.ports(), design.author()));
         }
         int limit = PcbsConfig.maxDesigns();
         boolean canSave = saved.size() < limit
@@ -481,7 +481,7 @@ public final class ModNetwork {
             return false;
         }
         list.add(new LibraryData.Design(cleanName(payload.name(), "Design " + (list.size() + 1)),
-                GridSerializer.write(grid), targetFaces(player, payload), ""));
+                GridSerializer.write(grid), targetFaces(player, payload), targetPorts(player, payload), ""));
         data.setDirty();
         return true;
     }
@@ -513,7 +513,7 @@ public final class ModNetwork {
             return;
         }
         LibraryData.Design design = mine.get(payload.index());
-        theirs.add(new LibraryData.Design(design.name(), design.data(), design.faces(),
+        theirs.add(new LibraryData.Design(design.name(), design.data(), design.faces(), design.ports(),
                 player.getGameProfile().getName()));
         data.setDirty();
     }
@@ -555,7 +555,7 @@ public final class ModNetwork {
             return false;
         }
         list.add(new LibraryData.Design(cleanName(payload.name(), "Imported " + (list.size() + 1)),
-                bytes, payload.faces(), ""));
+                bytes, payload.faces(), payload.ports(), ""));
         data.setDirty();
         return true;
     }
@@ -578,10 +578,23 @@ public final class ModNetwork {
         LibraryData.Design saved = list.get(payload.index());
         BlockState[] design = GridSerializer.read(saved.data(),
                 player.level().holderLookup(Registries.BLOCK));
-        setTargetGrid(player, payload, design, saved.faces());
+        setTargetGrid(player, payload, design, saved.faces(), saved.ports());
     }
 
     /** The gateway attachments of the board or item a library request targets. */
+    /**
+     * The target's redstone taps, so saving a design captures its porting rather than just its circuit.
+     * Mirrors {@link #targetFaces}: the item's chip data, or the placed block entity's own set.
+     */
+    private static byte[] targetPorts(ServerPlayer player, C2SLibraryPayload payload) {
+        if (payload.kind() == C2SEditPayload.KIND_ITEM) {
+            ItemStack stack = player.getInventory().getItem(payload.slot());
+            return stack.getItem() instanceof PcbItem ? readPorts(stack) : PortCodec.EMPTY;
+        }
+        return player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be
+                ? be.portBytes() : PortCodec.EMPTY;
+    }
+
     private static byte[] targetFaces(ServerPlayer player, C2SLibraryPayload payload) {
         if (payload.kind() == C2SEditPayload.KIND_ITEM) {
             ItemStack stack = player.getInventory().getItem(payload.slot());
@@ -600,23 +613,24 @@ public final class ModNetwork {
     }
 
     private static void setTargetGrid(ServerPlayer player, C2SLibraryPayload payload, BlockState[] grid,
-            byte[] faces) {
+            byte[] faces, byte[] ports) {
         if (payload.kind() == C2SEditPayload.KIND_ITEM) {
             ItemStack stack = player.getInventory().getItem(payload.slot());
             if (stack.getItem() instanceof PcbItem) {
                 stack.set(RedstonePcbs.platform().chip(),
-                        new ChipData(ChipData.pack(faces, PortCodec.EMPTY, GridSerializer.write(grid))));
+                        new ChipData(ChipData.pack(faces, ports, GridSerializer.write(grid))));
                 player.getInventory().setChanged();
                 player.inventoryMenu.broadcastChanges();
-                sendItemSnapshot(player, payload.slot(), grid, faces, PortCodec.EMPTY);
+                sendItemSnapshot(player, payload.slot(), grid, faces, ports);
             }
         } else if (player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be) {
             be.setGrid(grid);
             if (faces != null && faces.length > 0) {
                 be.setAttachFaces(PcbAttach.decode(faces));
             }
-            // A design carries no taps, so the target's old ones no longer match its new cells.
-            be.setTaps(BoardTaps.EMPTY);
+            // A design carries its own taps, so the target's old ones are replaced rather than kept: they
+            // referred to cells this design does not have.
+            be.setTaps(PortCodec.decode(ports));
             be.onEdited();
             sendBlockSnapshot(player, payload.pos(), be);
         }

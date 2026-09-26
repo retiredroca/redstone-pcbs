@@ -11,11 +11,16 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Client -> server request against the player's saved-designs library. */
 public record C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, int index, String name,
-        byte[] data, byte[] faces) implements CustomPacketPayload {
+        byte[] data, byte[] faces, byte[] ports) implements CustomPacketPayload {
 
     public C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, int index, String name,
             byte[] data) {
-        this(kind, slot, pos, action, index, name, data, EMPTY);
+        this(kind, slot, pos, action, index, name, data, EMPTY, EMPTY);
+    }
+
+    public C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, int index, String name,
+            byte[] data, byte[] faces) {
+        this(kind, slot, pos, action, index, name, data, faces, EMPTY);
     }
 
     public static final int ACTION_LIST = 0;
@@ -41,6 +46,7 @@ public record C2SLibraryPayload(int kind, int slot, BlockPos pos, int action, in
                 ByteBufCodecs.STRING_UTF8.encode(buf, payload.name());
                 ByteBufCodecs.BYTE_ARRAY.encode(buf, payload.data());
                 ByteBufCodecs.BYTE_ARRAY.encode(buf, payload.faces());
+                ByteBufCodecs.BYTE_ARRAY.encode(buf, payload.ports());
             },
             buf -> new C2SLibraryPayload(
                     ByteBufCodecs.VAR_INT.decode(buf),
