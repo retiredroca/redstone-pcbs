@@ -21,6 +21,8 @@ import net.minecraft.world.WorldlyContainer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.RedstoneTorchBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.Hopper;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
@@ -61,6 +63,12 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
     /** Redstone ports: grid cell index -> the port bridging that cell to a PCB face. */
     private final java.util.Map<Integer, PortLink> ports = new java.util.LinkedHashMap<>();
+
+    /**
+     * The level each input port's cell was last notified about, so a face is only touched while it
+     * carries a signal, and once more on the tick it drops to zero. See {@link #notifyPortCell}.
+     */
+    private final java.util.Map<Integer, Integer> notifiedLevels = new java.util.LinkedHashMap<>();
 
     /**
      * The level this board drives out of each world face, indexed by {@link Dir#ordinal()}. Written
@@ -669,6 +677,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
                 SignalBridge.publish(board, java.util.Map.of());
             }
             java.util.Arrays.fill(outLevels, 0);
+            notifiedLevels.clear();
             return;
         }
         java.util.Map<BlockPos, SignalBridge.Served> byPos = new java.util.LinkedHashMap<>();
@@ -677,13 +686,59 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         java.util.Arrays.fill(outLevels, 0);
         for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
             PortLink port = e.getValue();
-            byPos.put(space.pos(e.getKey()),
-                    new SignalBridge.Served(port, port.isInput() ? worldLevelOn(port.face()) : 0));
+            int level = port.isInput() ? worldLevelOn(port.face()) : 0;
+            byPos.put(space.pos(e.getKey()), new SignalBridge.Served(port, level));
+            if (port.isInput()) {
+                notifyPortCell(board, e.getKey(), space.pos(e.getKey()), level);
+            } else {
+                notifiedLevels.remove(e.getKey());
+            }
             if (port.isOutput()) {
                 sampleOutput(port, space.pos(e.getKey()));
             }
         }
+        notifiedLevels.keySet().removeIf(index -> !ports.containsKey(index));
         SignalBridge.publish(board, byPos);
+    }
+
+    /**
+     * Tells the cell a port sits on that its level may have changed, so vanilla redstone on that cell
+     * re-reads it. Only for a face that is actually live.
+     *
+     * <p>Without this the bridge is invisible to the board. A redstone wire recomputes {@code POWER}
+     * in exactly three places — {@code onPlace}, {@code onRemove} and {@code neighborChanged}
+     * ({@code RedStoneWireBlock}:361, 374, 404) — and there is no per-tick recompute anywhere. The port
+     * level changes in the registry without any block state changing, so a wire would compute its
+     * power once, at whatever the source happened to be doing at that instant, and keep it forever.
+     * This is the same reason vanilla relies on notifications rather than polling.
+     *
+     * <p>Scoped to the one face that has a signal: a level arriving on the east face must not touch the
+     * north face's cell, whose wire is already unpowered and has nothing to do. The one tick after a
+     * level falls to zero still fires, so the wire that was lit actually goes out — otherwise a wire
+     * would latch on permanently once it had been powered.
+     *
+     * <p>A torch is deliberately excluded. It answers {@code neighborChanged} by scheduling a tick that
+     * flips {@code LIT} ({@code RedstoneTorchBlock}:96-99), and that tick both burns the torch out when
+     * its support is powered and counts the flip, scheduling a 160-tick burnt-out cooldown past 100
+     * toggles in 60 ticks ({@code RedstoneTorchBlock}:82-88, 142). This notification is not a real block
+     * change — nothing about the cell moved — so it must not drive a state change that can latch. A
+     * torch still tracks its support, because vanilla re-evaluates it whenever the support genuinely
+     * changes state; what is withheld is the fabricated notification. The cell's neighbours are updated
+     * instead, so the circuit around a torch still re-reads the port.
+     */
+    private void notifyPortCell(ServerLevel board, int cell, BlockPos cellPos, int level) {
+        int previous = notifiedLevels.getOrDefault(cell, 0);
+        if (level <= 0 && previous <= 0) {
+            return;
+        }
+        notifiedLevels.put(cell, level);
+        BlockState state = board.getBlockState(cellPos);
+        Block block = state.getBlock();
+        if (block instanceof RedstoneTorchBlock) {
+            board.updateNeighborsAt(cellPos, block);
+            return;
+        }
+        board.neighborChanged(cellPos, block, cellPos.relative(Direction.UP));
     }
 
     /**
