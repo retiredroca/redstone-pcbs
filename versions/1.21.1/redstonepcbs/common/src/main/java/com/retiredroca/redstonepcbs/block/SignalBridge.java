@@ -37,7 +37,21 @@ public final class SignalBridge {
      * in that level. Server-scoped because the read happens in the board level, where the owning
      * {@link PcbBlockEntity} does not exist.
      */
-    private static final Map<BlockGetter, Map<BlockPos, PortLink>> PORTS = new HashMap<>();
+    private static final Map<BlockGetter, Map<BlockPos, Served>> PORTS = new HashMap<>();
+
+    /**
+     * A registered port and the level crossing it right now. The level is refreshed once per game tick
+     * by the owning block entity and held here, because the read that needs it happens in the board
+     * level during redstone propagation, which is not a point this mod can schedule work at.
+     */
+    public record Served(PortLink port, int level) {
+        public Served {
+            if (port == null) {
+                throw new IllegalArgumentException("port");
+            }
+            level = Math.max(0, Math.min(15, level));
+        }
+    }
 
     /** Set once, the first time a board signal read is intercepted. Proof the mixin applied. */
     private static boolean seenRead;
@@ -68,7 +82,7 @@ public final class SignalBridge {
      * Replaces one board's registered ports. Called from the owning block entity; an empty map removes
      * them. Rebuilt at most once per game tick, so this is not on the hot path.
      */
-    public static void publish(BlockGetter level, Map<BlockPos, PortLink> ports) {
+    public static void publish(BlockGetter level, Map<BlockPos, Served> ports) {
         if (ports.isEmpty()) {
             PORTS.remove(level);
         } else {
@@ -84,38 +98,44 @@ public final class SignalBridge {
 
     /** How many ports are registered on a level. Diagnostics only. */
     public static int count(BlockGetter level) {
-        Map<BlockPos, PortLink> ports = PORTS.get(level);
+        Map<BlockPos, Served> ports = PORTS.get(level);
         return ports == null ? 0 : ports.size();
     }
 
     /**
-     * The level this cell emits toward {@code dir} as a port, or {@code null} when the cell is not a
-     * port and vanilla's own answer must stand.
+     * The level this cell emits toward {@code dir} as an input port, or {@code null} when the cell is
+     * not an input port and vanilla's own answer must stand.
+     *
+     * <p>The same answer serves weak and strong power. The world-side read that produced the level is
+     * an ordinary signal query with no weak/strong distinction, so inventing one here would make the
+     * bridge report a strength the source never had.
      */
     @Nullable
-    public static Integer levelAt(BlockGetter level, BlockPos pos, Direction dir, boolean direct) {
+    public static Integer levelAt(BlockGetter level, BlockPos pos, Direction dir) {
         if (!isBoard(level)) {
             return null;
         }
         markSeenRead();
-        Map<BlockPos, PortLink> ports = PORTS.get(level);
+        Map<BlockPos, Served> ports = PORTS.get(level);
         if (ports == null) {
             return null;
         }
-        PortLink port = ports.get(pos);
-        if (port == null) {
+        Served served = ports.get(pos);
+        if (served == null) {
+            return null;
+        }
+        // Only an input port is served here. An output port is read out of the board by the block
+        // entity, not injected into it, so its cell keeps vanilla's own answer.
+        if (!served.port().isInput()) {
             return null;
         }
         // Only the linked side bridges; a read from any other side is the component's own behaviour.
         // The port records a chip Dir, so convert before comparing with the vanilla Direction.
-        Direction side = Directions.toMinecraft(port.side());
+        Direction side = Directions.toMinecraft(served.port().side());
         if (side != dir && side != dir.getOpposite()) {
             return null;
         }
-        // Nothing is served yet. The editor cannot assign a port until the selector exists, so the
-        // registry is always empty and this is unreachable in practice; serving 0 here would silently
-        // flatten a live circuit. Step 3 supplies the real level.
-        return null;
+        return served.level();
     }
 
     /**

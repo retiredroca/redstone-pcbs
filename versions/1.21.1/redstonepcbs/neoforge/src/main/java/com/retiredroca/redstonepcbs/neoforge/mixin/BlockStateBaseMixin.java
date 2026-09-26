@@ -27,7 +27,7 @@ public abstract class BlockStateBaseMixin {
     @Inject(method = "getSignal", at = @At("HEAD"), cancellable = true)
     private void redstonepcbs$bridgeWeakSignal(BlockGetter level, BlockPos pos, Direction direction,
             CallbackInfoReturnable<Integer> cir) {
-        Integer bridged = SignalBridge.levelAt(level, pos, direction, false);
+        Integer bridged = SignalBridge.levelAt(level, pos, direction);
         if (bridged != null) {
             cir.setReturnValue(bridged);
         }
@@ -36,7 +36,7 @@ public abstract class BlockStateBaseMixin {
     @Inject(method = "getDirectSignal", at = @At("HEAD"), cancellable = true)
     private void redstonepcbs$bridgeDirectSignal(BlockGetter level, BlockPos pos, Direction direction,
             CallbackInfoReturnable<Integer> cir) {
-        Integer bridged = SignalBridge.levelAt(level, pos, direction, true);
+        Integer bridged = SignalBridge.levelAt(level, pos, direction);
         if (bridged != null) {
             cir.setReturnValue(bridged);
         }

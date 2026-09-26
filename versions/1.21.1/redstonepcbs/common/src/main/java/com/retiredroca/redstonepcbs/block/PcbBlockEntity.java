@@ -136,6 +136,11 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         }
         ensureRegion();
         ensureBoundarySlots();
+        if (!ports.isEmpty()) {
+            // Refresh the levels crossing the boundary. The bridge serves what is published here, so
+            // without this a signal changing in the world would never reach the board.
+            publishPorts();
+        }
         if (!initialized) {
             initialized = true;
             // Old saves may carry locked neighbours from earlier builds; re-notify so adjacent
@@ -642,7 +647,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private void publishPorts() {
         ServerLevel board = pcbLevel();
         BoardSpace space = space();
-        if (board == null || space == null) {
+        if (board == null || space == null || level == null) {
             // No region means no cell positions, so there is nothing to serve. Publishing an empty
             // map also drops any ports a previous region of this board registered.
             if (board != null) {
@@ -650,11 +655,26 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             }
             return;
         }
-        java.util.Map<BlockPos, PortLink> byPos = new java.util.LinkedHashMap<>();
+        java.util.Map<BlockPos, SignalBridge.Served> byPos = new java.util.LinkedHashMap<>();
         for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
-            byPos.put(space.pos(e.getKey()), e.getValue());
+            PortLink port = e.getValue();
+            byPos.put(space.pos(e.getKey()),
+                    new SignalBridge.Served(port, port.isInput() ? worldLevelOn(port.face()) : 0));
         }
         SignalBridge.publish(board, byPos);
+    }
+
+    /**
+     * The level arriving on {@code face} from the world, read the way vanilla reads a neighbour: the
+     * block in that direction, asked what it emits back toward this PCB. A neighbouring PCB answers the
+     * same query once it emits, which is what makes board to world to board work without a special case.
+     *
+     * <p>This is a plain signal read, so it costs the same as any other neighbour check and needs no
+     * scheduled tick of its own.
+     */
+    private int worldLevelOn(Dir face) {
+        Direction dir = Directions.toMinecraft(face);
+        return level.getSignal(worldPosition.relative(dir), dir);
     }
 
     // --- persistence ------------------------------------------------------------------------------

@@ -73,9 +73,9 @@ public class PcbEditorScreen extends Screen {
     private static final int BASE_BTN_H = 14;
     /**
      * The panel's non-grid chrome (tabs, search box, lower controls, help) in base units. Tall enough
-     * for the three help lines under the buttons, the last being the redstone port key.
+     * for the seven per-key help lines and the faces-in-use toggle under the buttons.
      */
-    private static final int CHROME_H = 182;
+    private static final int CHROME_H = 262;
     /** Camera presets: 4 corner-overhead, 4 side-on (pitch 0), top. */
     private static final float[][] PRESETS = {
             {45, 35.264F}, {135, 35.264F}, {225, 35.264F}, {315, 35.264F},
@@ -99,11 +99,15 @@ public class PcbEditorScreen extends Screen {
     private boolean portConfirmOpen;
     private int portConfirmCell = -1;
     private PortLink portConfirmPort;
+    /** The PCB face being taken, for a gateway assignment, which carries no side or direction. */
+    private Dir gatewayConfirmFace;
     /** The cell that currently holds the contested face, so the dialog can name it. */
     private int portConfirmOwner = -1;
     /** The two dialog buttons, rebuilt when the dialog opens. Buttons are the only way out. */
     private Button portConfirmContinue;
     private Button portConfirmCancel;
+    /** When set, cycling skips faces another cell already holds instead of warning about them. */
+    private boolean skipAssignedFaces;
     private static final int PORT_FLASH_MS = 260;
     private static final int PORT_DIALOG_W = 200;
     private static final int PORT_DIALOG_H = 54;
@@ -351,18 +355,20 @@ public class PcbEditorScreen extends Screen {
      * component. Two buttons and nothing else, so it cannot be dismissed by accident.
      */
     private void drawPortConfirm(GuiGraphics graphics) {
-        if (!portConfirmOpen || portConfirmPort == null) {
+        if (!portConfirmOpen || (portConfirmPort == null && gatewayConfirmFace == null)) {
             return;
         }
         int x = (width - PORT_DIALOG_W) / 2;
         int y = height / 3;
         graphics.fill(x, y, x + PORT_DIALOG_W, y + PORT_DIALOG_H, 0xF0101010);
         graphics.fill(x, y, x + PORT_DIALOG_W, y + 1, 0xFFFF4040);
-        graphics.drawString(font, "Face " + portConfirmPort.face() + " is already assigned",
+        Dir named = gatewayConfirmFace != null ? gatewayConfirmFace : portConfirmPort.face();
+        graphics.drawString(font, "Face " + named + " is already assigned",
                 x + 6, y + 7, 0xFFFF6060, false);
         graphics.drawString(font, "to cell " + cellLabel(portConfirmOwner),
                 x + 6, y + 17, 0xFFFF6060, false);
-        graphics.drawString(font, "Continuing disconnects that component.",
+        graphics.drawString(font, gatewayConfirmFace != null
+                        ? "Continuing disconnects its container." : "Continuing disconnects that component.",
                 x + 6, y + 29, 0xFFCCCCCC, false);
         drawPortDialogButton(graphics, portConfirmContinue, "Continue");
         drawPortDialogButton(graphics, portConfirmCancel, "Cancel");
@@ -386,12 +392,41 @@ public class PcbEditorScreen extends Screen {
                 this::cancelPortTakeOver);
     }
 
+    /**
+     * Declines the take-over and moves the port to the next face that is free. Doing nothing left the
+     * cell on the same contested face, so the next P press raised the same dialog and the player could
+     * not cycle away from it at all.
+     */
     private void cancelPortTakeOver() {
-        portConfirmOpen = false;
-        portConfirmPort = null;
-        portConfirmOwner = -1;
-        portConfirmContinue = null;
-        portConfirmCancel = null;
+        int cell = portConfirmCell;
+        PortLink declined = portConfirmPort;
+        Dir declinedFace = gatewayConfirmFace;
+        clearPortConfirm();
+        if (declinedFace != null) {
+            // Walk to the next free gateway face, so cancelling does not re-offer the same one.
+            for (int step = 1; step <= Dir.VALUES.length; step++) {
+                Dir face = Dir.VALUES[(declinedFace.ordinal() + step) % Dir.VALUES.length];
+                int owner = cellForAttachFace(face);
+                if (owner < 0 || owner == cell) {
+                    attachFaces.put(cell, face);
+                    sendFace(cell, face);
+                    return;
+                }
+            }
+            return;
+        }
+        if (declined == null || cell < 0) {
+            return;
+        }
+        for (int step = 1; step <= Dir.VALUES.length; step++) {
+            Dir face = Dir.VALUES[(declined.face().ordinal() + step) % Dir.VALUES.length];
+            if (faceIsFree(face, cell)) {
+                PortLink moved = new PortLink(face, declined.side(), declined.flow());
+                ports.put(cell, moved);
+                sendPort(cell, moved, false);
+                return;
+            }
+        }
     }
 
     /** A cell index as readable x,y,z. */
@@ -529,10 +564,11 @@ public class PcbEditorScreen extends Screen {
             }
         }
         // While the warning is up, flash the contested face and the cell that currently holds it.
-        if (portConfirmOpen && portConfirmPort != null) {
+        if (portConfirmOpen && (portConfirmPort != null || gatewayConfirmFace != null)) {
             boolean on = (System.currentTimeMillis() / PORT_FLASH_MS) % 2 == 0;
             int color = on ? 0xE0FF2020 : 0x60FF2020;
-            drawPortFace(graphics, mvp, portConfirmPort.face(), color);
+            drawPortFace(graphics, mvp,
+                    gatewayConfirmFace != null ? gatewayConfirmFace : portConfirmPort.face(), color);
             if (portConfirmOwner >= 0) {
                 int ox = portConfirmOwner % BoardSpace.SIZE;
                 int oz = (portConfirmOwner / BoardSpace.SIZE) % BoardSpace.SIZE;
@@ -1235,6 +1271,12 @@ public class PcbEditorScreen extends Screen {
                 }
                 return true;
             }
+            case 70 -> { // F: cycle which PCB face the hovered cell's port is bridged on
+                if (index >= 0) {
+                    cyclePortFace(index);
+                }
+                return true;
+            }
             case 265, 264, 263, 262 -> { // arrow keys: no-op (pan is Ctrl/Alt + drag)
                 return true;
             }
@@ -1271,7 +1313,7 @@ public class PcbEditorScreen extends Screen {
             }
             boolean taken = attachFaces.entrySet().stream()
                     .anyMatch(e -> e.getKey() != index && e.getValue() == face);
-            if (!taken) {
+            if (!taken || !skipAssignedFaces) {
                 free.add(face);
             }
         }
@@ -1284,6 +1326,13 @@ public class PcbEditorScreen extends Screen {
             // The first free face after the current in DIR order; wrap to none when there is none.
             int currentOrdinal = current.ordinal();
             next = free.stream().filter(f -> f.ordinal() > currentOrdinal).findFirst().orElse(null);
+        }
+        if (next != null && !skipAssignedFaces) {
+            int owner = cellForAttachFace(next);
+            if (owner >= 0 && owner != index) {
+                openGatewayConfirm(index, next, owner);
+                return;
+            }
         }
         sendFace(index, next);
         if (next == null) {
@@ -1300,42 +1349,114 @@ public class PcbEditorScreen extends Screen {
      */
     private void cyclePort(int index) {
         BlockState state = index >= 0 && index < local.length ? local[index] : null;
-        List<PortLink> options = portOptions(index, state);
+        Dir face = portFaceFor(index);
+        List<PortLink> options = portOptions(index, state, face);
+        if (options.isEmpty()) {
+            return;
+        }
         PortLink current = ports.get(index);
-
-        PortLink next = null;
-        if (!options.isEmpty()) {
-            int at = -1;
-            if (current != null) {
-                for (int i = 0; i < options.size(); i++) {
-                    if (options.get(i).equals(current)) {
-                        at = i;
-                        break;
-                    }
+        int at = -1;
+        if (current != null) {
+            for (int i = 0; i < options.size(); i++) {
+                if (options.get(i).equals(current)) {
+                    at = i;
+                    break;
                 }
             }
-            int following = at + 1;
-            next = following >= options.size() ? null : options.get(following);
         }
-        if (next != null) {
-            int owner = cellForPortFace(next.face());
-            if (owner >= 0 && owner != index) {
-                // Deliberate action only: warn, and let the player press Continue. Assigning here would
-                // silently disconnect the other cell, which is not something a cycling key should do.
-                portConfirmOpen = true;
-                portConfirmCell = index;
-                portConfirmPort = next;
-                portConfirmOwner = owner;
-                buildPortConfirmButtons();
+        PortLink next = null;
+        for (int step = 1; step <= options.size(); step++) {
+            int i = (at + step) % options.size();
+            PortLink candidate = options.get(i);
+            if (faceIsFree(candidate.face(), index)) {
+                next = candidate;
+                break;
+            }
+            if (!skipAssignedFaces) {
+                // Deliberate action only: warn, and let the player press Continue. Assigning here
+                // would silently disconnect the other cell, which a cycling key must not do.
+                openPortConfirm(index, candidate, cellForPortFace(candidate.face()));
                 return;
             }
         }
+        // Past the last option, back to none.
+        next = at + 1 >= options.size() ? null : next;
         sendPort(index, next, false);
         if (next == null) {
             ports.remove(index);
         } else {
             ports.put(index, next);
         }
+    }
+
+    /**
+     * Cycles which PCB face an existing port is bridged on. A build need not span the whole 16^3 volume
+     * to reach every face, so this is the player's choice rather than derived from the cell's position.
+     */
+    private void cyclePortFace(int index) {
+        PortLink current = ports.get(index);
+        Dir from = current == null ? Dir.DOWN : current.face();
+        PortLink moved = null;
+        for (int step = 1; step <= Dir.VALUES.length; step++) {
+            Dir face = Dir.VALUES[(from.ordinal() + step) % Dir.VALUES.length];
+            PortLink candidate = new PortLink(face,
+                    current == null ? Dir.NORTH : current.side(),
+                    current == null ? PortFlow.OUT : current.flow());
+            if (faceIsFree(face, index)) {
+                moved = candidate;
+                break;
+            }
+            if (!skipAssignedFaces) {
+                openPortConfirm(index, candidate, cellForPortFace(face));
+                return;
+            }
+        }
+        if (moved == null) {
+            return;
+        }
+        sendPort(index, moved, false);
+        ports.put(index, moved);
+    }
+
+    /** Whether {@code face} is unclaimed, or already this cell's. */
+    private boolean faceIsFree(Dir face, int index) {
+        int owner = cellForPortFace(face);
+        return owner < 0 || owner == index;
+    }
+
+    /** The face this cell's port is on, defaulting to DOWN when it has no port yet. */
+    private Dir portFaceFor(int index) {
+        PortLink current = ports.get(index);
+        return current == null ? Dir.DOWN : current.face();
+    }
+
+    private void openPortConfirm(int index, PortLink candidate, int owner) {
+        portConfirmOpen = true;
+        portConfirmCell = index;
+        portConfirmPort = candidate;
+        portConfirmOwner = owner;
+        gatewayConfirmFace = null;
+        buildPortConfirmButtons();
+    }
+
+    /** The same warning for a gateway face, which displaces the container using it. */
+    private void openGatewayConfirm(int index, Dir face, int owner) {
+        portConfirmOpen = true;
+        portConfirmCell = index;
+        portConfirmPort = null;
+        gatewayConfirmFace = face;
+        portConfirmOwner = owner;
+        buildPortConfirmButtons();
+    }
+
+    /** The cell currently holding {@code face} as a gateway attachment, or -1. */
+    private int cellForAttachFace(Dir face) {
+        for (Map.Entry<Integer, Dir> e : attachFaces.entrySet()) {
+            if (e.getValue() == face) {
+                return e.getKey();
+            }
+        }
+        return -1;
     }
 
     /** The cell currently holding {@code face}, or -1. */
@@ -1350,18 +1471,29 @@ public class PcbEditorScreen extends Screen {
 
     /** Applies the confirmed port, displacing the cell that held the face. */
     private void confirmPortTakeOver() {
-        if (portConfirmPort == null) {
-            portConfirmOpen = false;
-            return;
+        if (gatewayConfirmFace != null) {
+            if (portConfirmOwner >= 0) {
+                attachFaces.remove(portConfirmOwner);
+            }
+            attachFaces.put(portConfirmCell, gatewayConfirmFace);
+            sendFace(portConfirmCell, gatewayConfirmFace);
+        } else if (portConfirmPort != null) {
+            if (portConfirmOwner >= 0) {
+                ports.remove(portConfirmOwner);
+            }
+            ports.put(portConfirmCell, portConfirmPort);
+            sendPort(portConfirmCell, portConfirmPort, true);
         }
-        if (portConfirmOwner >= 0) {
-            ports.remove(portConfirmOwner);
-        }
-        ports.put(portConfirmCell, portConfirmPort);
-        sendPort(portConfirmCell, portConfirmPort, true);
+        clearPortConfirm();
+    }
+
+    private void clearPortConfirm() {
         portConfirmOpen = false;
         portConfirmPort = null;
         portConfirmOwner = -1;
+        gatewayConfirmFace = null;
+        portConfirmContinue = null;
+        portConfirmCancel = null;
     }
 
     /**
@@ -1386,18 +1518,15 @@ public class PcbEditorScreen extends Screen {
     }
 
     /**
-     * Every port option this cell has, across all six PCB faces. Only the sides vanilla would actually
-     * connect are included, each offered out first then in, and the side varies fastest so a player
-     * walking the list changes direction before changing face.
+     * The port options this cell has on one PCB face: only the sides vanilla would actually connect,
+     * each offered out first then in.
      */
-    private List<PortLink> portOptions(int index, BlockState state) {
+    private List<PortLink> portOptions(int index, BlockState state, Dir face) {
         Dir[] sides = PortEligibility.sides(local, index);
-        List<PortLink> options = new ArrayList<>(sides.length * 12);
-        for (Dir face : Dir.VALUES) {
-            for (Dir side : sides) {
-                options.add(new PortLink(face, side, PortFlow.OUT));
-                options.add(new PortLink(face, side, PortFlow.IN));
-            }
+        List<PortLink> options = new ArrayList<>(sides.length * 2);
+        for (Dir side : sides) {
+            options.add(new PortLink(face, side, PortFlow.OUT));
+            options.add(new PortLink(face, side, PortFlow.IN));
         }
         return options;
     }
@@ -1615,9 +1744,23 @@ public class PcbEditorScreen extends Screen {
         });
         y += rowH + 4;
 
-        graphics.drawString(this.font, "L: place  Shift+L: erase  R-click: use", px, y, 0x9F9F9F, false);
-        graphics.drawString(this.font, "R: rotate  G: item gateway face", px, y + 10, 0x9F9F9F, false);
-        graphics.drawString(this.font, "P: redstone port  (green in, orange out)", px, y + 20, 0x9F9F9F, false);
+        // One key per line, hotkey then description, so a new key costs a line rather than a reflow.
+        String[] help = {
+            "L: place", "Shift+L: erase", "R-click: use", "R: rotate",
+            "G: item gateway face", "P: redstone port (green in, orange out)",
+            "F: port's PCB face",
+        };
+        for (int i = 0; i < help.length; i++) {
+            graphics.drawString(this.font, help[i], px, y + i * 10, 0x9F9F9F, false);
+        }
+        y += help.length * 10 + 2;
+        addButton(graphics, px, y, panelW, rowH,
+                skipAssignedFaces ? "Faces in use: skip" : "Faces in use: ask",
+                () -> skipAssignedFaces = !skipAssignedFaces);
+        y += rowH + 2;
+        graphics.drawString(this.font, skipAssignedFaces
+                ? "  G/P/F pass over an assigned face" : "  G/P/F ask before taking one",
+                px, y, 0x7F7F7F, false);
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
