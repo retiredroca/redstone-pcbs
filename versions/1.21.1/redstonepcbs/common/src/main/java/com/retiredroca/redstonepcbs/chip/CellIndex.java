@@ -40,4 +40,19 @@ public final class CellIndex {
     public static boolean valid(int index) {
         return index >= 0 && index < COUNT;
     }
+
+    /**
+     * The index one step from {@code index} in {@code dir}, or -1 when that step leaves the grid.
+     *
+     * <p>The bounds check is on the coordinates, not on the computed index. Validating the index instead
+     * wraps: stepping east off the last column computes an index that is still inside 0..COUNT-1 — the
+     * cell 16 blocks away on the opposite edge — so a cell near an edge would be judged against an
+     * unrelated one.
+     */
+    public static int neighbour(int index, Dir dir) {
+        int x = xOf(index) + dir.dx;
+        int y = yOf(index) + dir.dy;
+        int z = zOf(index) + dir.dz;
+        return inGrid(x, y, z) ? index(x, y, z) : -1;
+    }
 }

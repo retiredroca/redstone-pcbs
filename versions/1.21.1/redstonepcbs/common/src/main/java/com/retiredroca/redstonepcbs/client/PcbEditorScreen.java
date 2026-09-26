@@ -11,6 +11,7 @@ import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PortEligibility;
+import com.retiredroca.redstonepcbs.chip.CellIndex;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
@@ -1364,23 +1365,25 @@ public class PcbEditorScreen extends Screen {
                 }
             }
         }
+        // Past the last option the port clears; the next press starts again from the first. This is
+        // decided before the search, because nulling afterwards discarded a candidate the search had
+        // already found, so wrapping off the end showed "none" instead of the first option.
         PortLink next = null;
-        for (int step = 1; step <= options.size(); step++) {
-            int i = (at + step) % options.size();
-            PortLink candidate = options.get(i);
-            if (faceIsFree(candidate.face(), index)) {
-                next = candidate;
-                break;
-            }
-            if (!skipAssignedFaces) {
-                // Deliberate action only: warn, and let the player press Continue. Assigning here
-                // would silently disconnect the other cell, which a cycling key must not do.
-                openPortConfirm(index, candidate, cellForPortFace(candidate.face()));
-                return;
+        if (at + 1 < options.size()) {
+            for (int step = 1; step <= options.size() - at - 1; step++) {
+                PortLink candidate = options.get(at + step);
+                if (faceIsFree(candidate.face(), index)) {
+                    next = candidate;
+                    break;
+                }
+                if (!skipAssignedFaces) {
+                    // Deliberate action only: warn, and let the player press Continue. Assigning here
+                    // would silently disconnect the other cell, which a cycling key must not do.
+                    openPortConfirm(index, candidate, cellForPortFace(candidate.face()));
+                    return;
+                }
             }
         }
-        // Past the last option, back to none.
-        next = at + 1 >= options.size() ? null : next;
         sendPort(index, next, false);
         if (next == null) {
             ports.remove(index);

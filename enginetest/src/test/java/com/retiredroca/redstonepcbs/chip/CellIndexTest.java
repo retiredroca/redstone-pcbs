@@ -85,4 +85,45 @@ class CellIndexTest {
         assertTrue(!CellIndex.valid(-1));
         assertTrue(!CellIndex.valid(CellIndex.COUNT));
     }
+
+    /**
+     * The regression: validating the computed index instead of the coordinates wrapped to the cell 16
+     * blocks away, so an edge cell's neighbour was an unrelated one on the far side of the board.
+     */
+    @Test
+    void steppingOffTheEdgeReportsOffGridRatherThanWrapping() {
+        for (Dir dir : Dir.VALUES) {
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(15, 0, 0), Dir.EAST), "east off the edge");
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(0, 0, 0), Dir.WEST), "west off the edge");
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(0, 0, 0), Dir.NORTH), "north off the edge");
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(0, 0, 15), Dir.SOUTH), "south off the edge");
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(0, 0, 0), Dir.DOWN), "down off the edge");
+            assertEquals(-1, CellIndex.neighbour(CellIndex.index(0, 15, 0), Dir.UP), "up off the edge");
+            // And the same for every cell on the boundary, not just the corners.
+            for (int i = 0; i < CellIndex.COUNT; i++) {
+                int n = CellIndex.neighbour(i, dir);
+                if (n < 0) {
+                    continue;
+                }
+                int deltaX = Math.abs(CellIndex.xOf(n) - CellIndex.xOf(i));
+                int deltaY = Math.abs(CellIndex.yOf(n) - CellIndex.yOf(i));
+                int deltaZ = Math.abs(CellIndex.zOf(n) - CellIndex.zOf(i));
+                int steps = deltaX + deltaY + deltaZ;
+                assertEquals(1, steps, dir + " from " + i + " landed " + n + ", more than one step");
+            }
+        }
+    }
+
+    @Test
+    void neighbourIsTheOppositeOfNeighbouring() {
+        for (int i = 0; i < CellIndex.COUNT; i++) {
+            for (Dir dir : Dir.VALUES) {
+                int n = CellIndex.neighbour(i, dir);
+                if (n >= 0) {
+                    assertEquals(i, CellIndex.neighbour(n, dir.opposite()),
+                            "stepping " + dir + " then back from " + i);
+                }
+            }
+        }
+    }
 }

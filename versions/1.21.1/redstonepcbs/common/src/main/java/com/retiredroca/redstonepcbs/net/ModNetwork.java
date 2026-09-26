@@ -92,9 +92,13 @@ public final class ModNetwork {
                         C2SEditPayload.unpackPort(payload.packed()),
                         (payload.flags() & C2SEditPayload.FLAG_TAKE_OVER) != 0);
                 if (result == PcbBlockEntity.PortResult.FACE_TAKEN) {
-                    // The client checks before sending, so this is a stale client or a second player
-                    // racing for the same face. The snapshot below drops the port it just sent.
-                    LOGGER.info("PCB port: face already assigned, refused for cell {}", payload.index());
+                    // The editor checks before sending, so reaching here is a stale client or a second
+                    // player racing for the same face. The snapshot below drops what it just sent.
+                    PortLink wanted = C2SEditPayload.unpackPort(payload.packed());
+                    LOGGER.info("PCB port refused: cell {} wanted face {} already held by cell {}",
+                            payload.index(),
+                            wanted == null ? "?" : wanted.face(),
+                            wanted == null ? -1 : be.cellForPortFace(wanted.face()));
                 }
                 be.onEdited();
                 sendBlockSnapshot(player, payload.pos(), be);

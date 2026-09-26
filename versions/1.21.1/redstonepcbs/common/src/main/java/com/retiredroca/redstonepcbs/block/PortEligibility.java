@@ -53,7 +53,15 @@ public final class PortEligibility {
         return open.toArray(new Dir[0]);
     }
 
-    /** Whether a port may be assigned to {@code dir} on cell {@code index}. */
+    /**
+     * Whether a port may be assigned to {@code dir} on cell {@code index}.
+     *
+     * <p>Decided by what is in the neighbouring cell, not by the block's own remembered connections. A
+     * wire keeps a stale side after its neighbour is cleared, because vanilla only re-shapes a wire when
+     * a real neighbouring block changes — {@code neighborChanged} recomputes power, never shape — so a
+     * wire can still claim a join to a cell that is now air. Reading the cell instead answers the
+     * question actually being asked: is this side free for something that connects?
+     */
     public static boolean isOpen(BlockState[] grid, int index, Dir dir) {
         BlockState state = at(grid, index);
         if (state == null) {
@@ -67,25 +75,17 @@ public final class PortEligibility {
                 break;
             }
         }
-        if (!presentable || isConnected(state, dir)) {
-            return false;
-        }
-        return !blocksConnection(at(grid, neighbour(index, dir)));
+        return presentable && cellIsFree(at(grid, CellIndex.neighbour(index, dir)));
     }
 
-    /** The cell index one step from {@code index}, or -1 when that step leaves the grid. */
-    public static int neighbour(int index, Dir dir) {
-        int x = CellIndex.xOf(index);
-        int y = CellIndex.yOf(index);
-        int z = CellIndex.zOf(index);
-        return switch (dir) {
-            case DOWN -> CellIndex.valid(y - 1) ? CellIndex.index(x, y - 1, z) : -1;
-            case UP -> CellIndex.valid(y + 1) ? CellIndex.index(x, y + 1, z) : -1;
-            case NORTH -> CellIndex.valid(z - 1) ? CellIndex.index(x, y, z - 1) : -1;
-            case SOUTH -> CellIndex.valid(z + 1) ? CellIndex.index(x, y, z + 1) : -1;
-            case WEST -> CellIndex.valid(x - 1) ? CellIndex.index(x - 1, y, z) : -1;
-            case EAST -> CellIndex.valid(x + 1) ? CellIndex.index(x + 1, y, z) : -1;
-        };
+    /**
+     * Whether a cell is free for a component that connects: air, or something replaceable like snow or
+     * short grass. A full block is not free, and that is the case the maintainer described: a line
+     * running past a block it cannot connect to stays a line and does not power it, so a port there would
+     * do something vanilla never would. A cell just outside the grid is air, so it is free.
+     */
+    private static boolean cellIsFree(BlockState across) {
+        return across == null || across.isAir() || across.canBeReplaced();
     }
 
     private static BlockState at(BlockState[] grid, int index) {
@@ -96,26 +96,4 @@ public final class PortEligibility {
     }
 
     /** Whether a wire is already wired on {@code dir}. Other blocks are never already connected. */
-    private static boolean isConnected(BlockState state, Dir dir) {
-        if (!state.is(Blocks.REDSTONE_WIRE)) {
-            return false;
-        }
-        RedstoneSide side = switch (dir) {
-            case NORTH -> state.getValue(RedStoneWireBlock.NORTH);
-            case EAST -> state.getValue(RedStoneWireBlock.EAST);
-            case SOUTH -> state.getValue(RedStoneWireBlock.SOUTH);
-            case WEST -> state.getValue(RedStoneWireBlock.WEST);
-            // A wire is horizontal in vanilla, so a vertical side is not connected.
-            default -> RedstoneSide.NONE;
-        };
-        return side.isConnected();
-    }
-
-    /**
-     * Whether {@code across} fills its space, which is what stops a redstone connection in vanilla's
-     * default test. Air and anything outside the grid passes: nothing is in the way.
-     */
-    private static boolean blocksConnection(BlockState across) {
-        return across != null && !across.isAir() && across.canOcclude();
-    }
 }
