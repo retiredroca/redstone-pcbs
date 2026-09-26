@@ -10,8 +10,13 @@ import com.retiredroca.redstonepcbs.block.BoardSpace;
 import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbAttach;
+import com.retiredroca.redstonepcbs.block.PortEligibility;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
+import com.retiredroca.redstonepcbs.chip.PortCodec;
+import com.retiredroca.redstonepcbs.chip.PortFlow;
+import com.retiredroca.redstonepcbs.chip.PortLink;
+import com.retiredroca.redstonepcbs.chip.PortOptions;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
 import com.retiredroca.redstonepcbs.data.Blueprint;
 import com.retiredroca.redstonepcbs.data.LibraryData;
@@ -40,6 +45,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
+import org.jetbrains.annotations.Nullable;
+
 import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 import org.joml.Vector3f;
@@ -50,6 +57,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * PCB editor: a single orthographic 3D view of the board, rendered with vanilla block models, that
@@ -63,8 +71,11 @@ public class PcbEditorScreen extends Screen {
     /** Base widget metrics at 1.0 UI scale; the live values scale with the game resolution. */
     private static final int BASE_SLOT = 18;
     private static final int BASE_BTN_H = 14;
-    /** The panel's non-grid chrome (tabs, search box, lower controls, help) in base units. */
-    private static final int CHROME_H = 170;
+    /**
+     * The panel's non-grid chrome (tabs, search box, lower controls, help) in base units. Tall enough
+     * for the three help lines under the buttons, the last being the redstone port key.
+     */
+    private static final int CHROME_H = 182;
     /** Camera presets: 4 corner-overhead, 4 side-on (pitch 0), top. */
     private static final float[][] PRESETS = {
             {45, 35.264F}, {135, 35.264F}, {225, 35.264F}, {315, 35.264F},
@@ -82,6 +93,22 @@ public class PcbEditorScreen extends Screen {
     private BlockState[] local = GridSerializer.emptyGrid();
     /** Gateway attachments mirrored from the server: grid cell index -> PCB face. */
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
+    /** Redstone ports, mirroring the server's map so the render agrees with what is stored. */
+    private final java.util.Map<Integer, PortLink> ports = new java.util.LinkedHashMap<>();
+    /** A pending port assignment that would displace another cell from a face, awaiting confirmation. */
+    private boolean portConfirmOpen;
+    private int portConfirmCell = -1;
+    private PortLink portConfirmPort;
+    /** The cell that currently holds the contested face, so the dialog can name it. */
+    private int portConfirmOwner = -1;
+    /** The two dialog buttons, rebuilt when the dialog opens. Buttons are the only way out. */
+    private Button portConfirmContinue;
+    private Button portConfirmCancel;
+    private static final int PORT_FLASH_MS = 260;
+    private static final int PORT_DIALOG_W = 200;
+    private static final int PORT_DIALOG_H = 54;
+    private static final int PORT_BTN_W = 78;
+    private static final int PORT_BTN_H = 14;
     /** The part the selected palette entry corresponds to, or AIR for an arbitrary block item. */
     private Part selected = Part.DUST;
     private PcbIcons.Entry selectedEntry;
@@ -189,10 +216,12 @@ public class PcbEditorScreen extends Screen {
         return kind == C2SEditPayload.KIND_ITEM ? payload.slot() == slot : payload.pos().equals(pos);
     }
 
-    public void acceptSnapshot(byte[] data, byte[] faces) {
+    public void acceptSnapshot(byte[] data, byte[] faces, byte[] ports) {
         local = GridSerializer.read(data, blockLookup());
         attachFaces.clear();
         attachFaces.putAll(PcbAttach.decode(faces));
+        this.ports.clear();
+        this.ports.putAll(PortCodec.decode(ports));
     }
 
     private HolderGetter<Block> blockLookup() {
@@ -313,7 +342,66 @@ public class PcbEditorScreen extends Screen {
         render3D(graphics);
         renderPanel(graphics, mouseX, mouseY);
         // Queued rather than drawn here, so renderWithTooltip emits it after the whole screen render.
+        drawPortConfirm(graphics);
         drawTooltip();
+    }
+
+    /**
+     * The port warning: the face is already assigned to another cell, so continuing disconnects that
+     * component. Two buttons and nothing else, so it cannot be dismissed by accident.
+     */
+    private void drawPortConfirm(GuiGraphics graphics) {
+        if (!portConfirmOpen || portConfirmPort == null) {
+            return;
+        }
+        int x = (width - PORT_DIALOG_W) / 2;
+        int y = height / 3;
+        graphics.fill(x, y, x + PORT_DIALOG_W, y + PORT_DIALOG_H, 0xF0101010);
+        graphics.fill(x, y, x + PORT_DIALOG_W, y + 1, 0xFFFF4040);
+        graphics.drawString(font, "Face " + portConfirmPort.face() + " is already assigned",
+                x + 6, y + 7, 0xFFFF6060, false);
+        graphics.drawString(font, "to cell " + cellLabel(portConfirmOwner),
+                x + 6, y + 17, 0xFFFF6060, false);
+        graphics.drawString(font, "Continuing disconnects that component.",
+                x + 6, y + 29, 0xFFCCCCCC, false);
+        drawPortDialogButton(graphics, portConfirmContinue, "Continue");
+        drawPortDialogButton(graphics, portConfirmCancel, "Cancel");
+    }
+
+    private void drawPortDialogButton(GuiGraphics graphics, Button b, String label) {
+        if (b == null) {
+            return;
+        }
+        graphics.fill(b.x(), b.y(), b.x() + b.w(), b.y() + b.h(), 0xFF303030);
+        graphics.fill(b.x(), b.y(), b.x() + b.w(), b.y() + 1, 0xFF606060);
+        graphics.drawString(font, label, b.x() + 8, b.y() + 3, 0xFFFFFFFF, false);
+    }
+
+    /** Places the two buttons under the dialog, which is positioned from the screen size. */
+    private void buildPortConfirmButtons() {
+        int x = (width - PORT_DIALOG_W) / 2;
+        int y = height / 3 + PORT_DIALOG_H - PORT_BTN_H - 6;
+        portConfirmContinue = new Button(x + 8, y, PORT_BTN_W, PORT_BTN_H, this::confirmPortTakeOver);
+        portConfirmCancel = new Button(x + PORT_DIALOG_W - PORT_BTN_W - 8, y, PORT_BTN_W, PORT_BTN_H,
+                this::cancelPortTakeOver);
+    }
+
+    private void cancelPortTakeOver() {
+        portConfirmOpen = false;
+        portConfirmPort = null;
+        portConfirmOwner = -1;
+        portConfirmContinue = null;
+        portConfirmCancel = null;
+    }
+
+    /** A cell index as readable x,y,z. */
+    private static String cellLabel(int index) {
+        if (index < 0) {
+            return "?";
+        }
+        return (index % BoardSpace.SIZE) + ","
+                + (index / (BoardSpace.SIZE * BoardSpace.SIZE)) + ","
+                + ((index / BoardSpace.SIZE) % BoardSpace.SIZE);
     }
 
     private void drawTooltip() {
@@ -411,6 +499,45 @@ public class PcbEditorScreen extends Screen {
                 case SOUTH -> drawBoxWireframe(graphics, mvp, 0, 0, GRID, GRID, GRID, GRID + nudge, color);
                 case WEST -> drawBoxWireframe(graphics, mvp, -nudge, 0, 0, 0, GRID, GRID, color);
                 case EAST -> drawBoxWireframe(graphics, mvp, GRID, 0, 0, GRID + nudge, GRID, GRID, color);
+            }
+        }
+
+        // Ports: the assigned PCB face is outlined, and a marker sits on the cell's bridged side, both
+        // in the direction's colour so a build's inputs and outputs read at a glance.
+        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
+            PortLink port = e.getValue();
+            int color = portColor(port);
+            drawPortFace(graphics, mvp, port.face(), color);
+            int x = e.getKey() % BoardSpace.SIZE;
+            int z = (e.getKey() / BoardSpace.SIZE) % BoardSpace.SIZE;
+            int y = e.getKey() / (BoardSpace.SIZE * BoardSpace.SIZE);
+            switch (port.side()) {
+                case DOWN -> drawBoxWireframe(graphics, mvp, x, y, z, x + 1, y, z + 1, color);
+                case UP -> drawBoxWireframe(graphics, mvp, x, y + 1, z, x + 1, y + 1, z + 1, color);
+                case NORTH -> drawBoxWireframe(graphics, mvp, x, y, z, x + 1, y + 1, z, color);
+                case SOUTH -> drawBoxWireframe(graphics, mvp, x, y, z + 1, x + 1, y + 1, z + 1, color);
+                case WEST -> drawBoxWireframe(graphics, mvp, x, y, z, x, y + 1, z + 1, color);
+                case EAST -> drawBoxWireframe(graphics, mvp, x + 1, y, z, x + 1, y + 1, z + 1, color);
+            }
+        }
+        // The hovered cell's own port, in the same colour, so you can see which face it reaches without
+        // looking away from the cell you are on.
+        if (hoverBlock != null) {
+            PortLink hovered = ports.get(BoardSpace.index(hoverBlock[0], hoverBlock[1], hoverBlock[2]));
+            if (hovered != null) {
+                drawPortFace(graphics, mvp, hovered.face(), portColor(hovered));
+            }
+        }
+        // While the warning is up, flash the contested face and the cell that currently holds it.
+        if (portConfirmOpen && portConfirmPort != null) {
+            boolean on = (System.currentTimeMillis() / PORT_FLASH_MS) % 2 == 0;
+            int color = on ? 0xE0FF2020 : 0x60FF2020;
+            drawPortFace(graphics, mvp, portConfirmPort.face(), color);
+            if (portConfirmOwner >= 0) {
+                int ox = portConfirmOwner % BoardSpace.SIZE;
+                int oz = (portConfirmOwner / BoardSpace.SIZE) % BoardSpace.SIZE;
+                int oy = portConfirmOwner / (BoardSpace.SIZE * BoardSpace.SIZE);
+                drawBoxWireframe(graphics, mvp, ox, oy, oz, ox + 1, oy + 1, oz + 1, color);
             }
         }
 
@@ -634,6 +761,14 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (portConfirmOpen) {
+            if (portConfirmContinue != null && portConfirmContinue.contains(mouseX, mouseY)) {
+                confirmPortTakeOver();
+            } else if (portConfirmCancel != null && portConfirmCancel.contains(mouseX, mouseY)) {
+                cancelPortTakeOver();
+            }
+            return true;
+        }
         if (importOpen) {
             for (Button b : buttons) {
                 if (b.contains(mouseX, mouseY)) {
@@ -984,6 +1119,10 @@ public class PcbEditorScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (portConfirmOpen) {
+            // Deliberate action only: no key confirms or cancels, the two buttons are the whole dialog.
+            return true;
+        }
         if (importOpen) {
             if (keyCode == 256) { // Escape
                 importOpen = false;
@@ -1090,6 +1229,12 @@ public class PcbEditorScreen extends Screen {
                 }
                 return true;
             }
+            case 80 -> { // P: cycle the hovered cell's redstone port
+                if (index >= 0) {
+                    cyclePort(index);
+                }
+                return true;
+            }
             case 265, 264, 263, 262 -> { // arrow keys: no-op (pan is Ctrl/Alt + drag)
                 return true;
             }
@@ -1146,6 +1291,124 @@ public class PcbEditorScreen extends Screen {
         } else {
             attachFaces.put(index, next);
         }
+    }
+
+    /**
+     * Cycles the hovered cell's redstone port: none, then each side the cell offers, then back to none.
+     * Each side is offered both ways round, so a bidirectional part like a wire can be set either
+     * direction. The PCB face is a separate choice, cycled by {@link #cyclePortFace}.
+     */
+    private void cyclePort(int index) {
+        BlockState state = index >= 0 && index < local.length ? local[index] : null;
+        List<PortLink> options = portOptions(index, state);
+        PortLink current = ports.get(index);
+
+        PortLink next = null;
+        if (!options.isEmpty()) {
+            int at = -1;
+            if (current != null) {
+                for (int i = 0; i < options.size(); i++) {
+                    if (options.get(i).equals(current)) {
+                        at = i;
+                        break;
+                    }
+                }
+            }
+            int following = at + 1;
+            next = following >= options.size() ? null : options.get(following);
+        }
+        if (next != null) {
+            int owner = cellForPortFace(next.face());
+            if (owner >= 0 && owner != index) {
+                // Deliberate action only: warn, and let the player press Continue. Assigning here would
+                // silently disconnect the other cell, which is not something a cycling key should do.
+                portConfirmOpen = true;
+                portConfirmCell = index;
+                portConfirmPort = next;
+                portConfirmOwner = owner;
+                buildPortConfirmButtons();
+                return;
+            }
+        }
+        sendPort(index, next, false);
+        if (next == null) {
+            ports.remove(index);
+        } else {
+            ports.put(index, next);
+        }
+    }
+
+    /** The cell currently holding {@code face}, or -1. */
+    private int cellForPortFace(Dir face) {
+        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
+            if (e.getValue().face() == face) {
+                return e.getKey();
+            }
+        }
+        return -1;
+    }
+
+    /** Applies the confirmed port, displacing the cell that held the face. */
+    private void confirmPortTakeOver() {
+        if (portConfirmPort == null) {
+            portConfirmOpen = false;
+            return;
+        }
+        if (portConfirmOwner >= 0) {
+            ports.remove(portConfirmOwner);
+        }
+        ports.put(portConfirmCell, portConfirmPort);
+        sendPort(portConfirmCell, portConfirmPort, true);
+        portConfirmOpen = false;
+        portConfirmPort = null;
+        portConfirmOwner = -1;
+    }
+
+    /**
+     * Draws a wireframe on one PCB face of the board bounds. Used for every port's assigned face, the
+     * hovered cell's face, and the contested face while the warning is up.
+     */
+    private void drawPortFace(GuiGraphics graphics, Matrix4f mvp, Dir face, int color) {
+        int nudge = 1;
+        switch (face) {
+            case DOWN -> drawBoxWireframe(graphics, mvp, 0, -nudge, 0, GRID, 0, GRID, color);
+            case UP -> drawBoxWireframe(graphics, mvp, 0, GRID, 0, GRID, GRID + nudge, GRID, color);
+            case NORTH -> drawBoxWireframe(graphics, mvp, 0, 0, -nudge, GRID, GRID, 0, color);
+            case SOUTH -> drawBoxWireframe(graphics, mvp, 0, 0, GRID, GRID, GRID, GRID + nudge, color);
+            case WEST -> drawBoxWireframe(graphics, mvp, -nudge, 0, 0, 0, GRID, GRID, color);
+            case EAST -> drawBoxWireframe(graphics, mvp, GRID, 0, 0, GRID + nudge, GRID, GRID, color);
+        }
+    }
+
+    /** The colour a port's face is drawn in: green carrying in, orange carrying out. */
+    private static int portColor(PortLink port) {
+        return port.isInput() ? 0xC060FF60 : 0xC0FF9040;
+    }
+
+    /**
+     * Every port option this cell has, across all six PCB faces. Only the sides vanilla would actually
+     * connect are included, each offered out first then in, and the side varies fastest so a player
+     * walking the list changes direction before changing face.
+     */
+    private List<PortLink> portOptions(int index, BlockState state) {
+        Dir[] sides = PortEligibility.sides(local, index);
+        List<PortLink> options = new ArrayList<>(sides.length * 12);
+        for (Dir face : Dir.VALUES) {
+            for (Dir side : sides) {
+                options.add(new PortLink(face, side, PortFlow.OUT));
+                options.add(new PortLink(face, side, PortFlow.IN));
+            }
+        }
+        return options;
+    }
+
+    private void sendPort(int index, @Nullable PortLink port, boolean takeOver) {
+        int packed = port == null ? C2SEditPayload.PACKED_NONE : C2SEditPayload.packPort(
+                port.face(), port.side(), port.flow());
+        int flags = takeOver ? C2SEditPayload.FLAG_TAKE_OVER : 0;
+        RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
+                ? C2SEditPayload.portItem(slot, index, packed, flags)
+                : C2SEditPayload.port(pos, index, packed, flags));
     }
 
     private void sendFace(int index, Dir face) {
@@ -1354,6 +1617,7 @@ public class PcbEditorScreen extends Screen {
 
         graphics.drawString(this.font, "L: place  Shift+L: erase  R-click: use", px, y, 0x9F9F9F, false);
         graphics.drawString(this.font, "R: rotate  G: item gateway face", px, y + 10, 0x9F9F9F, false);
+        graphics.drawString(this.font, "P: redstone port  (green in, orange out)", px, y + 20, 0x9F9F9F, false);
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
@@ -1649,6 +1913,12 @@ public class PcbEditorScreen extends Screen {
             Dir attach = attachFaces.get(index);
             if (attach != null) {
                 lines.add(Component.literal("gateway: " + attach.name().toLowerCase(java.util.Locale.ROOT)));
+            }
+            PortLink port = ports.get(index);
+            if (port != null) {
+                lines.add(Component.literal("port: " + (port.isInput() ? "in" : "out")
+                        + " on " + port.face().name().toLowerCase(java.util.Locale.ROOT)
+                        + ", side " + port.side().name().toLowerCase(java.util.Locale.ROOT)));
             }
             return join(lines);
         }

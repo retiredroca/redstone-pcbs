@@ -8,6 +8,8 @@ import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.Dir;
+import com.retiredroca.redstonepcbs.chip.PortCodec;
+import com.retiredroca.redstonepcbs.chip.PortLink;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
 import com.retiredroca.redstonepcbs.craft.Crafting;
@@ -37,6 +39,9 @@ import java.util.Map;
  * grid, change it, write it back (so Minecraft re-runs the redstone), and reply with a snapshot.
  */
 public final class ModNetwork {
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger("redstonepcbs");
+
     private static final double MAX_EDIT_DISTANCE_SQR = 64.0;
 
     private ModNetwork() {}
@@ -82,6 +87,19 @@ public final class ModNetwork {
                 sendBlockSnapshot(player, payload.pos(), be);
                 return;
             }
+            case C2SEditPayload.ACTION_SET_PORT -> {
+                PcbBlockEntity.PortResult result = be.setPort(payload.index(),
+                        C2SEditPayload.unpackPort(payload.packed()),
+                        (payload.flags() & C2SEditPayload.FLAG_TAKE_OVER) != 0);
+                if (result == PcbBlockEntity.PortResult.FACE_TAKEN) {
+                    // The client checks before sending, so this is a stale client or a second player
+                    // racing for the same face. The snapshot below drops the port it just sent.
+                    LOGGER.info("PCB port: face already assigned, refused for cell {}", payload.index());
+                }
+                be.onEdited();
+                sendBlockSnapshot(player, payload.pos(), be);
+                return;
+            }
             default -> {
             }
         }
@@ -92,8 +110,10 @@ public final class ModNetwork {
             // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
             switch (payload.action()) {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
-                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE ->
-                        be.clearAttachFace(payload.index());
+                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
+                    be.clearAttachFace(payload.index());
+                    be.clearPort(payload.index());
+                }
                 default -> {
                 }
             }
@@ -107,28 +127,40 @@ public final class ModNetwork {
             return;
         }
         if (payload.action() == C2SEditPayload.ACTION_REQUEST) {
-            sendItemSnapshot(player, payload.slot(), readGrid(player, stack), readFaces(stack));
+            sendItemSnapshot(player, payload.slot(), readGrid(player, stack), readFaces(stack), readPorts(stack));
             return;
         }
         BlockState[] grid = readGrid(player, stack);
         Map<Integer, Dir> faces = new LinkedHashMap<>(PcbAttach.decode(readFaces(stack)));
+        Map<Integer, PortLink> ports = new LinkedHashMap<>(PortCodec.decode(readPorts(stack)));
         if (payload.action() == C2SEditPayload.ACTION_SET_FACE) {
             applyFace(faces, payload);
+        } else if (payload.action() == C2SEditPayload.ACTION_SET_PORT) {
+            applyPort(ports, payload);
         } else if (apply(player, grid, payload)) {
             // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
             switch (payload.action()) {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
-                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE ->
-                        faces.remove(payload.index());
+                        C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
+                    faces.remove(payload.index());
+                    ports.remove(payload.index());
+                }
                 default -> {
                 }
             }
         }
         stack.set(RedstonePcbs.platform().chip(),
-                new ChipData(ChipData.pack(PcbAttach.encode(faces), GridSerializer.write(grid))));
+                new ChipData(ChipData.pack(PcbAttach.encode(faces), PortCodec.encode(ports),
+                        GridSerializer.write(grid))));
         player.getInventory().setChanged();
         player.inventoryMenu.broadcastChanges();
-        sendItemSnapshot(player, payload.slot(), grid, PcbAttach.encode(faces));
+        sendItemSnapshot(player, payload.slot(), grid, PcbAttach.encode(faces), PortCodec.encode(ports));
+    }
+
+    /** The redstone port bytes carried by a PCB item (empty when none). */
+    public static byte[] readPorts(ItemStack stack) {
+        ChipData data = stack.get(RedstonePcbs.platform().chip());
+        return data == null ? PortCodec.EMPTY : data.ports();
     }
 
     /** The gateway attachment bytes carried by a PCB item (empty when none). */
@@ -157,7 +189,8 @@ public final class ModNetwork {
     }
 
     private static void sendBlockSnapshot(ServerPlayer player, BlockPos pos, PcbBlockEntity be) {
-        RedstonePcbs.platform().sendToPlayer(player, S2CSnapshotPayload.block(pos, be.snapshotBytes(), be.attachBytes()));
+        RedstonePcbs.platform().sendToPlayer(player,
+                S2CSnapshotPayload.block(pos, be.snapshotBytes(), be.attachBytes(), be.portBytes()));
     }
 
     private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid) {
@@ -167,6 +200,12 @@ public final class ModNetwork {
     private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid, byte[] faces) {
         RedstonePcbs.platform().sendToPlayer(player,
                 S2CSnapshotPayload.item(slot, GridSerializer.write(grid), faces));
+    }
+
+    private static void sendItemSnapshot(ServerPlayer player, int slot, BlockState[] grid, byte[] faces,
+            byte[] ports) {
+        RedstonePcbs.platform().sendToPlayer(player,
+                S2CSnapshotPayload.item(slot, GridSerializer.write(grid), faces, ports));
     }
 
     /**
@@ -210,6 +249,33 @@ public final class ModNetwork {
         Dir face = Dir.byOrdinal(packed);
         faces.values().removeIf(f -> f == face);
         faces.put(index, face);
+    }
+
+    /**
+     * Applies an {@code ACTION_SET_PORT} to a portable board's port map. Unlike a gateway face a port
+     * is not exclusive, so nothing else is displaced; 0xFF clears the cell's port.
+     */
+    private static void applyPort(Map<Integer, PortLink> ports, C2SEditPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= GridSerializer.COUNT) {
+            return;
+        }
+        PortLink port = C2SEditPayload.unpackPort(payload.packed());
+        if (port == null) {
+            ports.remove(index);
+            return;
+        }
+        Dir face = port.face();
+        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
+            if (e.getKey() != index && e.getValue().face() == face) {
+                if ((payload.flags() & C2SEditPayload.FLAG_TAKE_OVER) == 0) {
+                    return;
+                }
+                ports.remove(e.getKey());
+                break;
+            }
+        }
+        ports.put(index, port);
     }
 
     // --- edit application -------------------------------------------------------------------------
@@ -548,16 +614,18 @@ public final class ModNetwork {
             ItemStack stack = player.getInventory().getItem(payload.slot());
             if (stack.getItem() instanceof PcbItem) {
                 stack.set(RedstonePcbs.platform().chip(),
-                        new ChipData(ChipData.pack(faces, GridSerializer.write(grid))));
+                        new ChipData(ChipData.pack(faces, PortCodec.EMPTY, GridSerializer.write(grid))));
                 player.getInventory().setChanged();
                 player.inventoryMenu.broadcastChanges();
-                sendItemSnapshot(player, payload.slot(), grid, faces);
+                sendItemSnapshot(player, payload.slot(), grid, faces, PortCodec.EMPTY);
             }
         } else if (player.level().getBlockEntity(payload.pos()) instanceof PcbBlockEntity be) {
             be.setGrid(grid);
             if (faces != null && faces.length > 0) {
                 be.setAttachFaces(PcbAttach.decode(faces));
             }
+            // A design carries no ports, so the target's old ones no longer match its new cells.
+            be.setPorts(Map.of());
             be.onEdited();
             sendBlockSnapshot(player, payload.pos(), be);
         }

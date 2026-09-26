@@ -1,6 +1,7 @@
 package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.chip.PortCodec;
 import com.retiredroca.redstonepcbs.data.ChipData;
 
 import net.minecraft.core.BlockPos;
@@ -104,6 +105,10 @@ public class PcbBlock extends Block implements EntityBlock {
                 if (faces.length > 0) {
                     be.setAttachFaces(PcbAttach.decode(faces));
                 }
+                byte[] ports = data.ports();
+                if (ports.length > 0) {
+                    be.setPorts(PortCodec.decode(ports));
+                }
             }
             be.ensureRegionNow();
         }
@@ -115,7 +120,7 @@ public class PcbBlock extends Block implements EntityBlock {
         if (!level.isClientSide && blockEntity instanceof PcbBlockEntity be) {
             ItemStack drop = new ItemStack(RedstonePcbs.platform().pcbItem());
             drop.set(RedstonePcbs.platform().chip(),
-                    new ChipData(ChipData.pack(be.attachBytes(), be.snapshotBytes())));
+                    new ChipData(ChipData.pack(be.attachBytes(), be.portBytes(), be.snapshotBytes())));
             Block.popResource(level, pos, drop);
             be.releaseRegion();
         }

@@ -2,6 +2,8 @@ package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
 import com.retiredroca.redstonepcbs.chip.Dir;
+import com.retiredroca.redstonepcbs.chip.PortCodec;
+import com.retiredroca.redstonepcbs.chip.PortLink;
 import com.retiredroca.redstonepcbs.net.S2COpenEditorPayload;
 import com.retiredroca.redstonepcbs.net.S2CSnapshotPayload;
 
@@ -57,6 +59,8 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private int cooldownTime;
     /** Gateway attachments: grid cell index -> the PCB face it is exposed on. */
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
+    /** Redstone ports: grid cell index -> the port bridging that cell to a PCB face. */
+    private final java.util.Map<Integer, PortLink> ports = new java.util.LinkedHashMap<>();
 
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("redstonepcbs");
 
@@ -201,7 +205,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     public void sendEditorTo(ServerPlayer player, Dir face) {
         RedstonePcbs.platform().sendToPlayer(player, S2COpenEditorPayload.block(worldPosition, face.ordinal()));
         RedstonePcbs.platform().sendToPlayer(player,
-                S2CSnapshotPayload.block(worldPosition, snapshotBytes(), attachBytes()));
+                S2CSnapshotPayload.block(worldPosition, snapshotBytes(), attachBytes(), portBytes()));
     }
 
     public void onEdited() {
@@ -218,6 +222,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         boardChunk = null;
         regionCleaned = false;
         boundarySlots = List.of();
+        // The region is gone, so its cell positions must stop serving levels.
+        if (pcbLevel != null) {
+            SignalBridge.publish(pcbLevel, java.util.Map.of());
+        }
     }
 
     // --- world item gateway -----------------------------------------------------------------------
@@ -535,6 +543,120 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         return PcbAttach.encode(attachFaces);
     }
 
+    // --- redstone ports ---------------------------------------------------------------------------
+
+    /** Every redstone port on this board (cell index -> port). Unlike a face, one is not exclusive. */
+    public java.util.Map<Integer, PortLink> ports() {
+        return java.util.Collections.unmodifiableMap(ports);
+    }
+
+    /** The port on {@code index}, or {@code null}. */
+    @Nullable
+    public PortLink port(int index) {
+        return ports.get(index);
+    }
+
+    /** The outcome of a port assignment, so the client can warn before displacing another cell. */
+    public enum PortResult {
+        /** Assigned, or the cell's port was cleared. */
+        OK,
+        /** The face is already assigned to a different cell; nothing changed. */
+        FACE_TAKEN
+    }
+
+    /** The cell currently holding {@code face} as a port, or -1. */
+    public int cellForPortFace(Dir face) {
+        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
+            if (e.getValue().face() == face) {
+                return e.getKey();
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Sets or clears {@code index}'s port. One designated port per PCB face: assigning a face another
+     * cell already holds is refused rather than silently displacing that cell, so the editor can warn
+     * first. A cell may still hold ports on several different faces.
+     */
+    public PortResult setPort(int index, @Nullable PortLink port) {
+        return setPort(index, port, false);
+    }
+
+    /**
+     * As {@link #setPort(int, PortLink)}, but {@code takeOver} allows displacing the cell that already
+     * holds the face. The editor only sets it after the player confirms.
+     */
+    public PortResult setPort(int index, @Nullable PortLink port, boolean takeOver) {
+        if (port == null) {
+            ports.remove(index);
+            publishPorts();
+            setChanged();
+            return PortResult.OK;
+        }
+        int owner = cellForPortFace(port.face());
+        if (owner >= 0 && owner != index) {
+            if (!takeOver) {
+                return PortResult.FACE_TAKEN;
+            }
+            ports.remove(owner);
+        }
+        ports.put(index, port);
+        publishPorts();
+        setChanged();
+        return PortResult.OK;
+    }
+
+    /** Replaces every port with {@code replacements}, used when a board is placed from its item. */
+    public void setPorts(java.util.Map<Integer, PortLink> replacements) {
+        ports.clear();
+        for (Map.Entry<Integer, PortLink> e : replacements.entrySet()) {
+            int index = e.getKey();
+            if (index < 0 || index >= GridSerializer.COUNT || e.getValue() == null) {
+                continue;
+            }
+            ports.put(index, e.getValue());
+        }
+        publishPorts();
+        setChanged();
+    }
+
+    /** Drops any port for {@code index} (used when the cell is cleared or replaced). */
+    public void clearPort(int index) {
+        if (ports.remove(index) != null) {
+            publishPorts();
+            setChanged();
+        }
+    }
+
+    /** The port bytes for the snapshot payload. */
+    public byte[] portBytes() {
+        return PortCodec.encode(ports);
+    }
+
+    /**
+     * Publishes the ports to the signal bridge, which serves them to vanilla's signal reads. The board
+     * dimension is where those reads happen, and this block entity lives in the world, so the bridge
+     * keeps its own server-scoped map keyed by level.
+     */
+    private void publishPorts() {
+        ServerLevel board = pcbLevel();
+        BoardSpace space = space();
+        if (board == null || space == null) {
+            // No region means no cell positions, so there is nothing to serve. Publishing an empty
+            // map also drops any ports a previous region of this board registered.
+            if (board != null) {
+                SignalBridge.publish(board, java.util.Map.of());
+            }
+            return;
+        }
+        java.util.Map<BlockPos, PortLink> byPos = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
+            byPos.put(space.pos(e.getKey()), e.getValue());
+        }
+        SignalBridge.publish(board, byPos);
+    }
+
     // --- persistence ------------------------------------------------------------------------------
 
     @Override
@@ -547,6 +669,9 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (!attachFaces.isEmpty()) {
             tag.putByteArray("attach", attachBytes());
         }
+        if (!ports.isEmpty()) {
+            tag.putByteArray("ports", portBytes());
+        }
     }
 
     @Override
@@ -557,6 +682,11 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (tag.contains("attach")) {
             attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));
         }
+        ports.clear();
+        if (tag.contains("ports")) {
+            ports.putAll(PortCodec.decode(tag.getByteArray("ports")));
+        }
+        publishPorts();
     }
 
     @Override

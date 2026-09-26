@@ -4,6 +4,7 @@
   "package": "com.retiredroca.redstonepcbs.fabric.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BlockStateBaseMixin",
     "MappedRegistryAccessor",
     "MinecraftServerAccessor",
     "MinecraftServerMixin",
