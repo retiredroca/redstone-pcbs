@@ -9,7 +9,8 @@ import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
-import com.retiredroca.redstonepcbs.chip.PortLink;
+import com.retiredroca.redstonepcbs.chip.PortFlow;
+import com.retiredroca.redstonepcbs.chip.BoardPort;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
 import com.retiredroca.redstonepcbs.craft.Crafting;
@@ -88,17 +89,12 @@ public final class ModNetwork {
                 return;
             }
             case C2SEditPayload.ACTION_SET_PORT -> {
-                PcbBlockEntity.PortResult result = be.setPort(payload.index(),
-                        C2SEditPayload.unpackPort(payload.packed()),
-                        (payload.flags() & C2SEditPayload.FLAG_TAKE_OVER) != 0);
-                if (result == PcbBlockEntity.PortResult.FACE_TAKEN) {
-                    // The editor checks before sending, so reaching here is a stale client or a second
-                    // player racing for the same face. The snapshot below drops what it just sent.
-                    PortLink wanted = C2SEditPayload.unpackPort(payload.packed());
-                    LOGGER.info("PCB port refused: cell {} wanted face {} already held by cell {}",
-                            payload.index(),
-                            wanted == null ? "?" : wanted.face(),
-                            wanted == null ? -1 : be.cellForPortFace(wanted.face()));
+                PortFlow flow = C2SEditPayload.unpackFlow(payload.packed());
+                BoardPort wanted = flow == null ? null : new BoardPort(payload.index(), flow);
+                if (!be.setPort(wanted)) {
+                    // Only a cell outside the grid reaches here; the editor will not send one, so this
+                    // is a stale client and the snapshot below drops what it just asked for.
+                    LOGGER.info("PCB tap refused on cell {}: outside the grid", payload.index());
                 }
                 be.onEdited();
                 sendBlockSnapshot(player, payload.pos(), be);
@@ -116,7 +112,9 @@ public final class ModNetwork {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
                         C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
                     be.clearAttachFace(payload.index());
-                    be.clearPort(payload.index());
+                    if (be.port() != null && be.port().cell() == payload.index()) {
+                        be.setPort(null);
+                    }
                 }
                 default -> {
                 }
@@ -136,18 +134,20 @@ public final class ModNetwork {
         }
         BlockState[] grid = readGrid(player, stack);
         Map<Integer, Dir> faces = new LinkedHashMap<>(PcbAttach.decode(readFaces(stack)));
-        Map<Integer, PortLink> ports = new LinkedHashMap<>(PortCodec.decode(readPorts(stack)));
+        BoardPort ports = PortCodec.decode(readPorts(stack));
         if (payload.action() == C2SEditPayload.ACTION_SET_FACE) {
             applyFace(faces, payload);
         } else if (payload.action() == C2SEditPayload.ACTION_SET_PORT) {
-            applyPort(ports, payload);
+            ports = applyPort(payload);
         } else if (apply(player, grid, payload)) {
             // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
             switch (payload.action()) {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
                         C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
                     faces.remove(payload.index());
-                    ports.remove(payload.index());
+                    if (ports != null && ports.cell() == payload.index()) {
+                        ports = null;
+                    }
                 }
                 default -> {
                 }
@@ -256,30 +256,16 @@ public final class ModNetwork {
     }
 
     /**
-     * Applies an {@code ACTION_SET_PORT} to a portable board's port map. Unlike a gateway face a port
-     * is not exclusive, so nothing else is displaced; 0xFF clears the cell's port.
+     * Applies a bridge assignment to the item being edited. One bridge, so there is no conflict to
+     * resolve: naming a different cell simply moves it.
      */
-    private static void applyPort(Map<Integer, PortLink> ports, C2SEditPayload payload) {
+    private static BoardPort applyPort(C2SEditPayload payload) {
         int index = payload.index();
         if (index < 0 || index >= GridSerializer.COUNT) {
-            return;
+            return null;
         }
-        PortLink port = C2SEditPayload.unpackPort(payload.packed());
-        if (port == null) {
-            ports.remove(index);
-            return;
-        }
-        Dir face = port.face();
-        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
-            if (e.getKey() != index && e.getValue().face() == face) {
-                if ((payload.flags() & C2SEditPayload.FLAG_TAKE_OVER) == 0) {
-                    return;
-                }
-                ports.remove(e.getKey());
-                break;
-            }
-        }
-        ports.put(index, port);
+        PortFlow flow = C2SEditPayload.unpackFlow(payload.packed());
+        return flow == null ? null : new BoardPort(index, flow);
     }
 
     // --- edit application -------------------------------------------------------------------------
@@ -629,7 +615,7 @@ public final class ModNetwork {
                 be.setAttachFaces(PcbAttach.decode(faces));
             }
             // A design carries no ports, so the target's old ones no longer match its new cells.
-            be.setPorts(Map.of());
+            be.setPort(null);
             be.onEdited();
             sendBlockSnapshot(player, payload.pos(), be);
         }

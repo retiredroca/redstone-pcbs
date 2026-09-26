@@ -3,7 +3,7 @@ package com.retiredroca.redstonepcbs.block;
 import com.retiredroca.redstonepcbs.RedstonePcbs;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
-import com.retiredroca.redstonepcbs.chip.PortLink;
+import com.retiredroca.redstonepcbs.chip.BoardPort;
 import com.retiredroca.redstonepcbs.net.S2COpenEditorPayload;
 import com.retiredroca.redstonepcbs.net.S2CSnapshotPayload;
 
@@ -22,7 +22,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.RedstoneTorchBlock;
+import net.minecraft.world.level.redstone.NeighborUpdater;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.Hopper;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
@@ -61,20 +61,28 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     private int cooldownTime;
     /** Gateway attachments: grid cell index -> the PCB face it is exposed on. */
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
-    /** Redstone ports: grid cell index -> the port bridging that cell to a PCB face. */
-    private final java.util.Map<Integer, PortLink> ports = new java.util.LinkedHashMap<>();
+    /**
+     * The board's single redstone bridge, or {@code null}. Either an input or an output, never both,
+     * and with no face: the block is powered from whichever neighbour carries the level.
+     */
+    @Nullable
+    private BoardPort port;
 
     /**
-     * The level each input port's cell was last notified about, so a face is only touched while it
-     * carries a signal, and once more on the tick it drops to zero. See {@link #notifyPortCell}.
+     * The level the bridge's cell was last notified about, so the cell is only touched while the bridge
+     * carries something, and once more on the tick it drops to zero. See {@link #notifyPortCell}.
      */
-    private final java.util.Map<Integer, Integer> notifiedLevels = new java.util.LinkedHashMap<>();
+    private int lastNotified;
 
     /**
-     * The level this board drives out of each world face, indexed by {@link Dir#ordinal()}. Written
-     * once per server tick by {@link #publishPorts()} and read by {@link PcbBlock#getSignal}.
+     * The level this board drives into the world. Written once per server tick by
+     * {@link #publishPort()} and read by {@link PcbBlock#getSignal} in every direction.
      */
-    private final int[] outLevels = new int[Dir.VALUES.length];
+    private int outLevel;
+
+    /** The last logged {@code cell:flow:level}, so the diagnostic reports changes rather than every tick. */
+    @Nullable
+    private String lastLoggedPort;
 
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("redstonepcbs");
 
@@ -159,10 +167,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         }
         ensureRegion();
         ensureBoundarySlots();
-        if (!ports.isEmpty()) {
-            // Refresh the levels crossing the boundary. The bridge serves what is published here, so
+        if (port != null) {
+            // Refresh the level crossing the boundary. The bridge serves what is published here, so
             // without this a signal changing in the world would never reach the board.
-            publishPorts();
+            publishPort();
         }
         if (!initialized) {
             initialized = true;
@@ -571,232 +579,193 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         return PcbAttach.encode(attachFaces);
     }
 
-    // --- redstone ports ---------------------------------------------------------------------------
+    // --- redstone bridge -------------------------------------------------------------------------
 
-    /** Every redstone port on this board (cell index -> port). Unlike a face, one is not exclusive. */
-    public java.util.Map<Integer, PortLink> ports() {
-        return java.util.Collections.unmodifiableMap(ports);
-    }
-
-    /** The port on {@code index}, or {@code null}. */
+    /** This board's single bridge, or {@code null} when it has none. */
     @Nullable
-    public PortLink port(int index) {
-        return ports.get(index);
-    }
-
-    /** The outcome of a port assignment, so the client can warn before displacing another cell. */
-    public enum PortResult {
-        /** Assigned, or the cell's port was cleared. */
-        OK,
-        /** The face is already assigned to a different cell; nothing changed. */
-        FACE_TAKEN
-    }
-
-    /** The cell currently holding {@code face} as a port, or -1. */
-    public int cellForPortFace(Dir face) {
-        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
-            if (e.getValue().face() == face) {
-                return e.getKey();
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Sets or clears {@code index}'s port. One designated port per PCB face: assigning a face another
-     * cell already holds is refused rather than silently displacing that cell, so the editor can warn
-     * first. A cell may still hold ports on several different faces.
-     */
-    public PortResult setPort(int index, @Nullable PortLink port) {
-        return setPort(index, port, false);
-    }
-
-    /**
-     * As {@link #setPort(int, PortLink)}, but {@code takeOver} allows displacing the cell that already
-     * holds the face. The editor only sets it after the player confirms.
-     */
-    public PortResult setPort(int index, @Nullable PortLink port, boolean takeOver) {
-        if (port == null) {
-            ports.remove(index);
-            publishPorts();
-            setChanged();
-            return PortResult.OK;
-        }
-        int owner = cellForPortFace(port.face());
-        if (owner >= 0 && owner != index) {
-            if (!takeOver) {
-                return PortResult.FACE_TAKEN;
-            }
-            ports.remove(owner);
-        }
-        ports.put(index, port);
-        publishPorts();
-        setChanged();
-        return PortResult.OK;
-    }
-
-    /** Replaces every port with {@code replacements}, used when a board is placed from its item. */
-    public void setPorts(java.util.Map<Integer, PortLink> replacements) {
-        ports.clear();
-        for (Map.Entry<Integer, PortLink> e : replacements.entrySet()) {
-            int index = e.getKey();
-            if (index < 0 || index >= GridSerializer.COUNT || e.getValue() == null) {
-                continue;
-            }
-            ports.put(index, e.getValue());
-        }
-        publishPorts();
-        setChanged();
-    }
-
-    /** Drops any port for {@code index} (used when the cell is cleared or replaced). */
-    public void clearPort(int index) {
-        if (ports.remove(index) != null) {
-            publishPorts();
-            setChanged();
-        }
+    public BoardPort port() {
+        return port;
     }
 
     /** The port bytes for the snapshot payload. */
     public byte[] portBytes() {
-        return PortCodec.encode(ports);
+        return PortCodec.encode(port);
     }
 
     /**
-     * Publishes the ports to the signal bridge, which serves them to vanilla's signal reads. The board
-     * dimension is where those reads happen, and this block entity lives in the world, so the bridge
-     * keeps its own server-scoped map keyed by level.
+     * Sets or clears the bridge. One per board, and it is either an input or an output, never both.
+     * Assigning a different cell simply moves it, since there is nothing to conflict with any more.
+     *
+     * <p>Any cell in the grid is legal for either direction, so nothing is refused here except an index
+     * outside it. A tap is a source the components around it read, which is why an empty cell is the
+     * normal case rather than a rejected one.
      */
-    private void publishPorts() {
+    public boolean setPort(@Nullable BoardPort replacement) {
+        if (replacement != null
+                && (replacement.cell() < 0 || replacement.cell() >= GridSerializer.COUNT)) {
+            return false;
+        }
+        if (java.util.Objects.equals(port, replacement)) {
+            return true;
+        }
+        int previous = port == null ? -1 : port.cell();
+        port = replacement;
+        if (previous >= 0 && (replacement == null || replacement.cell() != previous)) {
+            // The cell that lost the bridge must stop being lit by it, or a removed input would latch
+            // the circuit on. One notification, through the live path.
+            ServerLevel board = pcbLevel();
+            BoardSpace space = space();
+            if (board != null && space != null) {
+                notifyPortCell(board, previous, space.pos(previous), 0);
+            }
+        }
+        publishPort();
+        setChanged();
+        return true;
+    }
+
+    /**
+     * Samples both directions and hands the result to the signal bridge, which serves it to vanilla's
+     * signal reads in the board. The board dimension is where those reads happen and this block entity
+     * lives in the world, so the bridge keeps its own server-scoped map keyed by level.
+     *
+     * <p>One port, so one sample. An input reads the level the PCB receives from the world; an output
+     * reads the level the bridge's own cell is driving in the board.
+     */
+    private void publishPort() {
         ServerLevel board = pcbLevel();
         BoardSpace space = space();
-        if (board == null || space == null || level == null) {
-            // No region means no cell positions, so there is nothing to serve. Publishing an empty
-            // map also drops any ports a previous region of this board registered.
+        if (board == null || space == null || level == null || port == null) {
+            // No region means no cell positions, so there is nothing to serve. Publishing an empty map
+            // also drops any bridge a previous region of this board registered.
             if (board != null) {
                 SignalBridge.publish(board, java.util.Map.of());
             }
-            java.util.Arrays.fill(outLevels, 0);
-            notifiedLevels.clear();
+            outLevel = 0;
+            lastNotified = 0;
             return;
         }
-        java.util.Map<BlockPos, SignalBridge.Served> byPos = new java.util.LinkedHashMap<>();
-        // Reset before re-sampling: a port removed since the last tick must not leave its level
-        // latched on the face, or the board would keep driving a face nothing is attached to.
-        java.util.Arrays.fill(outLevels, 0);
-        for (Map.Entry<Integer, PortLink> e : ports.entrySet()) {
-            PortLink port = e.getValue();
-            int level = port.isInput() ? worldLevelOn(port.face()) : 0;
-            byPos.put(space.pos(e.getKey()), new SignalBridge.Served(port, level));
-            if (port.isInput()) {
-                notifyPortCell(board, e.getKey(), space.pos(e.getKey()), level);
-            } else {
-                notifiedLevels.remove(e.getKey());
-            }
-            if (port.isOutput()) {
-                sampleOutput(port, space.pos(e.getKey()));
-            }
+        BlockPos cellPos = space.pos(port.cell());
+        outLevel = 0;
+        int carried;
+        if (port.isInput()) {
+            carried = worldLevelIn();
+        } else {
+            carried = sampleOutput(board, cellPos);
+            outLevel = carried;
         }
-        notifiedLevels.keySet().removeIf(index -> !ports.containsKey(index));
-        SignalBridge.publish(board, byPos);
+        logPortChange(carried);
+        SignalBridge.publish(board, java.util.Map.of(cellPos, new SignalBridge.Served(port.flow(), carried)));
+        if (port.isInput()) {
+            notifyPortCell(board, port.cell(), cellPos, carried);
+        }
     }
 
     /**
-     * Tells the cell a port sits on that its level may have changed, so vanilla redstone on that cell
-     * re-reads it. Only for a face that is actually live.
+     * The level the world delivers to this PCB, from whichever of its six neighbours carries it.
      *
-     * <p>Without this the bridge is invisible to the board. A redstone wire recomputes {@code POWER}
-     * in exactly three places — {@code onPlace}, {@code onRemove} and {@code neighborChanged}
-     * ({@code RedStoneWireBlock}:361, 374, 404) — and there is no per-tick recompute anywhere. The port
-     * level changes in the registry without any block state changing, so a wire would compute its
-     * power once, at whatever the source happened to be doing at that instant, and keep it forever.
-     * This is the same reason vanilla relies on notifications rather than polling.
+     * <p>{@code getBestNeighborSignal} rather than a read of one particular neighbour, because the block
+     * is powered as a block and vanilla's notion of that is every side at once — the same direction set
+     * {@code HopperBlock.checkPoweredState} consults through {@code hasNeighborSignal}. It also returns a
+     * level rather than a yes/no, so a dimmer source arrives dimmer. Direction-free by construction, so
+     * no face can be mismatched between the editor and the world.
+     */
+    private int worldLevelIn() {
+        return Math.clamp(level.getBestNeighborSignal(worldPosition), 0, 15);
+    }
+
+    /**
+     * The level the tap is collecting from the board, for an output.
      *
-     * <p>Scoped to the one face that has a signal: a level arriving on the east face must not touch the
-     * north face's cell, whose wire is already unpowered and has nothing to do. The one tick after a
-     * level falls to zero still fires, so the wire that was lit actually goes out — otherwise a wire
-     * would latch on permanently once it had been powered.
+     * <p>The tap sits <em>beside</em> the component rather than on it, so the emitter is normally one of
+     * its six neighbours. Both the cell itself and every neighbour are read and the strongest wins, which
+     * is what lets a tap be an ordinary empty cell with a wire running past it.
      *
-     * <p>A torch is deliberately excluded. It answers {@code neighborChanged} by scheduling a tick that
-     * flips {@code LIT} ({@code RedstoneTorchBlock}:96-99), and that tick both burns the torch out when
-     * its support is powered and counts the flip, scheduling a 160-tick burnt-out cooldown past 100
-     * toggles in 60 ticks ({@code RedstoneTorchBlock}:82-88, 142). This notification is not a real block
-     * change — nothing about the cell moved — so it must not drive a state change that can latch. A
-     * torch still tracks its support, because vanilla re-evaluates it whenever the support genuinely
-     * changes state; what is withheld is the fabricated notification. The cell's neighbours are updated
-     * instead, so the circuit around a torch still re-reads the port.
+     * <p>Symmetric with an input, and deliberately so: an input powers everything beside the tap, so an
+     * output collecting from everything beside the tap is the same reach seen from the other side. A tap
+     * placed next to something you did not mean to carry will carry it. That is the builder's judgement
+     * to make, exactly as it is for an input.
+     *
+     * <p>Safe even though the bridge is served on the cell itself: {@link SignalBridge#levelAt} answers
+     * {@code null} for anything but an input, so these reads are purely vanilla's and the bridge can never
+     * report feeding itself.
+     */
+    private int sampleOutput(ServerLevel board, BlockPos cellPos) {
+        int best = Math.clamp(board.getSignal(cellPos, Direction.UP), 0, 15);
+        for (Direction dir : Direction.values()) {
+            BlockPos neighbour = cellPos.relative(dir);
+            int read = Math.clamp(board.getSignal(neighbour, dir), 0, 15);
+            if (read > best) {
+                best = read;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Logs the bridge whenever the level it carries changes. Aimed at answering, in one launch, which of
+     * three things is wrong: a level that never leaves zero means the world is not delivering, a level
+     * that moves while the circuit stays dead means the bridge is not being served, and no line at all
+     * means the port never reached the server.
+     */
+    private void logPortChange(int carried) {
+        String signature = port.cell() + ":" + port.flow() + ":" + carried;
+        if (signature.equals(lastLoggedPort)) {
+            return;
+        }
+        lastLoggedPort = signature;
+        LOGGER.info("PCB {}: bridge cell {} {} carrying {}", worldPosition, port.cell(), port.flow(), carried);
+    }
+
+    /**
+     * Tells the components around the tap that its level may have changed, so vanilla redstone beside it
+     * re-reads. Only for a bridge that is actually carrying something.
+     *
+     * <p>Without this the bridge is invisible to the board. A redstone wire recomputes {@code POWER} in
+     * exactly three places -- {@code onPlace}, {@code onRemove} and {@code neighborChanged}
+     * ({@code RedStoneWireBlock}:361, 374, 404) -- and has no tick or {@code scheduleTick} at all, so a
+     * wire would compute its power once, at whatever the source happened to be doing at that instant, and
+     * keep it forever. This is the same reason vanilla relies on notifications rather than polling.
+     *
+     * <p>The tap's own cell is not notified, because the tap is a source rather than a sink: nothing
+     * placed in it is ever powered by the bridge, and its contents are bypassed for emission. Only the
+     * cells that read it matter.
+     *
+     * <p>Each neighbour is updated as though it had changed, which is what vanilla's
+     * {@code updateNeighborsAt} would do -- except that in 1.21.1 that method, like
+     * {@code Level.neighborChanged}, compiles to a bare {@code return}. They are vestigial, kept for
+     * compatibility, and the live architecture routes updates through the {@link NeighborUpdater} held
+     * on {@code Level}. Calling either is silently a no-op. Verified in the bytecode of the mapped jar,
+     * not the decompiled sources, which show the same empty bodies and read as if they were implemented.
+     *
+     * <p>A torch beside the tap reacts, and that is correct: this notification says "your neighbour's
+     * output changed", which is exactly what a torch's burnout logic is asking about. The one tick after a
+     * level falls to zero still fires, so a wire that was lit actually goes out rather than latching on
+     * once it had been powered.
      */
     private void notifyPortCell(ServerLevel board, int cell, BlockPos cellPos, int level) {
-        int previous = notifiedLevels.getOrDefault(cell, 0);
-        if (level <= 0 && previous <= 0) {
+        if (level <= 0 && lastNotified <= 0) {
             return;
         }
-        notifiedLevels.put(cell, level);
-        BlockState state = board.getBlockState(cellPos);
-        Block block = state.getBlock();
-        if (block instanceof RedstoneTorchBlock) {
-            board.updateNeighborsAt(cellPos, block);
-            return;
-        }
-        board.neighborChanged(cellPos, block, cellPos.relative(Direction.UP));
-    }
-
-    /**
-     * Samples the board's level for an output port and holds it as this board's level for the port's
-     * world face, which {@link PcbBlock#getSignal} then serves.
-     *
-     * <p>The level is taken along the port's own side axis rather than along the face, which is the
-     * exact mirror of the input path: an input serves the level arriving on the face onto the port's
-     * side, and an output takes the level leaving on the port's side and presents it on the face. The
-     * two therefore read the same pin of the same component, which is what makes a board reading its
-     * own output a no-op instead of a feedback loop.
-     *
-     * <p>Direction convention, from vanilla's own {@code SignalGetter.getDirectSignalTo}, which asks
-     * {@code getDirectSignal(pos.below(), DOWN)} for the signal arriving at {@code pos} from below: the
-     * argument names the side the <em>source</em> is on, and the returned value is the emission in the
-     * opposite direction. So emission toward {@code side} is {@code getSignal(cell, side.getOpposite())}.
-     */
-    private void sampleOutput(PortLink port, BlockPos cellPos) {
-        Direction side = Directions.toMinecraft(port.side());
-        int level = Math.clamp(pcbLevel().getSignal(cellPos, side.getOpposite()), 0, 15);
-        // Indexed by Direction.ordinal() on both the write here and the read in outputLevel, never by
-        // Dir.ordinal(). The two enums happen to be declared in the same order today, but they are
-        // distinct types and nothing enforces that: indexing by one and reading with the other would
-        // send the level out of the wrong face with no compile error and no failing test if either
-        // order ever changed. Converting here means only one enum is ever used as an index.
-        int face = Directions.toMinecraft(port.face()).ordinal();
-        if (outLevels[face] != 0 && outLevels[face] != level) {
-            // The editor only lets one port own a face, so this means two disagree. Take the lower
-            // cell index deterministically rather than letting map order decide, and say so.
-            LOGGER.warn("PCB {}: face {} has two output ports ({} and {}) at different levels; "
-                            + "keeping the first by cell index",
-                    worldPosition, port.face(), outLevels[face], level);
-        }
-        if (outLevels[face] == 0) {
-            outLevels[face] = level;
+        lastNotified = level;
+        Block block = board.getBlockState(cellPos).getBlock();
+        for (Direction dir : Direction.values()) {
+            BlockPos neighbour = cellPos.relative(dir);
+            NeighborUpdater.executeUpdate(board, board.getBlockState(neighbour), neighbour, block, cellPos,
+                    false);
         }
     }
 
     /**
-     * The level this board drives out of the given world face, sampled once per server tick by
-     * {@link #publishPorts()}. Vanilla reads this through {@link PcbBlock#getSignal}, so a value
-     * cached here is at most one tick old, the same latency a comparator reading its container has.
-     */
-    public int outputLevel(Direction face) {
-        return outLevels[face.ordinal()];
-    }
-
-    /**
-     * The level arriving on {@code face} from the world, read the way vanilla reads a neighbour: the
-     * block in that direction, asked what it emits back toward this PCB. A neighbouring PCB answers the
-     * same query once it emits, which is what makes board to world to board work without a special case.
+     * The level this board drives into the world, sampled once per server tick by
+     * {@link #publishPort()}. Vanilla reads this through {@link PcbBlock#getSignal}, so a value cached
+     * here is at most one tick old, the same latency a comparator reading its container has.
      *
-     * <p>This is a plain signal read, so it costs the same as any other neighbour check and needs no
-     * scheduled tick of its own.
+     * <p>One level for the whole block, offered in every direction. A redstone block behaves the same
+     * way, returning 15 regardless of which side is asked.
      */
-    private int worldLevelOn(Dir face) {
-        Direction dir = Directions.toMinecraft(face);
-        return level.getSignal(worldPosition.relative(dir), dir);
+    public int outputLevel() {
+        return outLevel;
     }
 
     // --- persistence ------------------------------------------------------------------------------
@@ -811,7 +780,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (!attachFaces.isEmpty()) {
             tag.putByteArray("attach", attachBytes());
         }
-        if (!ports.isEmpty()) {
+        if (port != null) {
             tag.putByteArray("ports", portBytes());
         }
     }
@@ -824,11 +793,18 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (tag.contains("attach")) {
             attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));
         }
-        ports.clear();
+        port = null;
+        lastLoggedPort = null;
         if (tag.contains("ports")) {
-            ports.putAll(PortCodec.decode(tag.getByteArray("ports")));
+            byte[] data = tag.getByteArray("ports");
+            port = PortCodec.decode(data);
+            if (data != null && data.length > 0 && port == null) {
+                // A per-face payload this build cannot read. Said out loud rather than dropped, since
+                // the player will otherwise find a board that silently lost its bridge.
+                LOGGER.warn("PCB {}: dropping a per-face port payload this build cannot read; reassign the bridge in the editor", worldPosition);
+            }
         }
-        publishPorts();
+        publishPort();
     }
 
     @Override

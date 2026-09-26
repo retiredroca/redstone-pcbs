@@ -15,8 +15,15 @@ import java.util.Arrays;
  * <p>Minecraft-free so both layouts are unit tested in {@code enginetest}.
  */
 public final class ChipLayout {
-    /** Marks a payload that carries a ports section. */
-    static final byte[] MAGIC = {'P', 'C', 'B', 'P'};
+    /** Marks a payload whose ports section holds the single-cell bridge. */
+    static final byte[] MAGIC = {'P', 'C', 'B', 'Q'};
+    /**
+     * The previous marker, whose ports section held one entry per cell with a face and a side. Its bytes
+     * are not the same shape as {@link #MAGIC}'s and reading them with the new decoder would invent a
+     * port from a cell index and a direction that no longer exist, so a payload carrying this marker is
+     * read for its grid and gateway attachments and its ports are dropped.
+     */
+    static final byte[] LEGACY_MAGIC = {'P', 'C', 'B', 'P'};
 
     private ChipLayout() {}
 
@@ -39,14 +46,26 @@ public final class ChipLayout {
         return out;
     }
 
-    /** Whether {@code data} carries the new marker, and so a ports section. */
+    /** Whether {@code data} carries the current marker, and so a ports section this build can read. */
     public static boolean hasPorts(byte[] data) {
         return data != null && data.length >= 4 && Arrays.equals(MAGIC, Arrays.copyOf(data, 4));
     }
 
+    /**
+     * Whether {@code data} carries any header at all, current or legacy. Both put the faces section at
+     * offset 4, so the grid and the gateway attachments still read; only the ports differ.
+     */
+    static boolean hasHeader(byte[] data) {
+        if (data == null || data.length < 4) {
+            return false;
+        }
+        byte[] head = Arrays.copyOf(data, 4);
+        return Arrays.equals(MAGIC, head) || Arrays.equals(LEGACY_MAGIC, head);
+    }
+
     /** The gateway attachment bytes. Empty when absent or malformed. */
     public static byte[] faces(byte[] data) {
-        int at = hasPorts(data) ? 4 : 0;
+        int at = hasHeader(data) ? 4 : 0;
         int len = lenAt(data, at);
         if (len < 0) {
             return new byte[0];
@@ -55,7 +74,10 @@ public final class ChipLayout {
         return copy(data, at, len);
     }
 
-    /** The redstone port bytes. Empty when the payload predates ports, or is malformed. */
+    /**
+     * The redstone port bytes. Empty when the payload predates ports, carries the per-face format this
+     * build cannot read, or is malformed.
+     */
     public static byte[] ports(byte[] data) {
         if (!hasPorts(data)) {
             return new byte[0];
@@ -82,7 +104,7 @@ public final class ChipLayout {
         if (data == null) {
             return new byte[0];
         }
-        if (!hasPorts(data)) {
+        if (!hasHeader(data)) {
             // Old layout: [facesLen:4][faces][grid]. A payload too short to hold a header is a bare
             // grid, which is what pre-header saves contained.
             if (data.length < 4) {

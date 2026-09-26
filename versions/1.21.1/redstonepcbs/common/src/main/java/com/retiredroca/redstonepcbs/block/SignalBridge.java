@@ -1,6 +1,6 @@
 package com.retiredroca.redstonepcbs.block;
 
-import com.retiredroca.redstonepcbs.chip.PortLink;
+import com.retiredroca.redstonepcbs.chip.PortFlow;
 import com.retiredroca.redstonepcbs.dimension.PcbDimension;
 
 import net.minecraft.core.BlockPos;
@@ -40,14 +40,18 @@ public final class SignalBridge {
     private static final Map<BlockGetter, Map<BlockPos, Served>> PORTS = new HashMap<>();
 
     /**
-     * A registered port and the level crossing it right now. The level is refreshed once per game tick
-     * by the owning block entity and held here, because the read that needs it happens in the board
+     * A registered bridge cell and the level crossing it right now. The level is refreshed once per game
+     * tick by the owning block entity and held here, because the read that needs it happens in the board
      * level during redstone propagation, which is not a point this mod can schedule work at.
+     *
+     * <p>The cell is served to every direction. There is no face to be aligned with any more: an input
+     * arrives at the PCB from whichever neighbour carries it, so the cell hands the level to whatever in
+     * the circuit reads it, and an output leaves through all six faces.
      */
-    public record Served(PortLink port, int level) {
+    public record Served(PortFlow flow, int level) {
         public Served {
-            if (port == null) {
-                throw new IllegalArgumentException("port");
+            if (flow == null) {
+                throw new IllegalArgumentException("flow");
             }
             level = Math.max(0, Math.min(15, level));
         }
@@ -103,13 +107,15 @@ public final class SignalBridge {
     }
 
     /**
-     * The level this cell emits toward {@code dir} as an input port, or {@code null} when the cell is
-     * not an input port and vanilla's own answer must stand.
+     * The level the tapped cell emits toward {@code dir} as an input, or {@code null} when the cell is
+     * not an input and vanilla's own answer must stand.
      *
-     * <p>Served on all six directions. The port's recorded side is which <em>world</em> face the port
-     * belongs to — place against the south face and the side is south — not a direction the injected
-     * level is confined to. Gating reads on it made the bridge silently return null whenever the
-     * circuit was routed along any other axis, with no way for the player to see why.
+     * <p>Served on all six directions, because a tap is a source rather than a port on a face. Nothing
+     * placed <em>in</em> the tapped cell is powered by this: every block that could read it reads its
+     * neighbours instead -- {@code getBestNeighborSignal} and {@code hasNeighborSignal} both call
+     * {@code getSignal(pos.relative(dir), dir)}, and a diode calls
+     * {@code getSignal(pos.relative(FACING), FACING)}. So the components the player wants driven are the
+     * ones placed <em>around</em> the tap, and the tap itself is usually an empty cell.
      *
      * <p>The same answer serves weak and strong power. The world-side read that produced the level is
      * an ordinary signal query with no weak/strong distinction, so inventing one here would make the
@@ -118,30 +124,6 @@ public final class SignalBridge {
     @Nullable
     public static Integer levelAt(BlockGetter level, BlockPos pos, Direction dir) {
         return servedLevel(level, pos);
-    }
-
-    /**
-     * The level an input port injects into whatever block sits on the port's own cell, or
-     * {@code null} when the cell is not an input port.
-     *
-     * <p>This is the half that was missing. {@link #levelAt} answers "what does this cell emit", which
-     * only reaches the blocks <em>around</em> the port: vanilla redstone computes a block's power by
-     * reading its six neighbours ({@code RedStoneWireBlock.calculateTargetStrength} calls
-     * {@code getBestNeighborSignal}, which reads {@code getSignal(pos.relative(dir), dir)}), so a wire
-     * sitting on the port cell never reads its own position and could never light. The port needs to
-     * reach the block it is assigned to, not only its surroundings.
-     *
-     * <p>So the reader-side queries need the reader's position, which the signal-read injection point
-     * does not carry. {@code getBestNeighborSignal}, {@code hasNeighborSignal} and
-     * {@code getDirectSignalTo} all take the reader's own position, and folding the port's level in
-     * there makes the cell behave exactly as if a vanilla signal source stood beside it.
-     *
-     * <p>Reads the level out of the registry and never re-queries the level, so a port cell that is
-     * its own neighbour cannot re-enter this path.
-     */
-    @Nullable
-    public static Integer levelForCell(BlockGetter level, BlockPos cell) {
-        return servedLevel(level, cell);
     }
 
     @Nullable
@@ -158,10 +140,10 @@ public final class SignalBridge {
         if (served == null) {
             return null;
         }
-        // Only an input port injects into the board. An output port is read out of the board by the
-        // block entity, so its cell keeps vanilla's own answer and a board reading its own output
-        // stays a no-op rather than a feedback loop.
-        if (!served.port().isInput()) {
+        // Only an input injects into the board. An output is read out of the board by the block
+        // entity, so its cell keeps vanilla's own answer and a board reading its own output stays a
+        // no-op rather than a feedback loop.
+        if (served.flow() != PortFlow.IN) {
             return null;
         }
         return served.level();

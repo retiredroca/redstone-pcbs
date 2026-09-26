@@ -105,10 +105,7 @@ public class PcbBlock extends Block implements EntityBlock {
                 if (faces.length > 0) {
                     be.setAttachFaces(PcbAttach.decode(faces));
                 }
-                byte[] ports = data.ports();
-                if (ports.length > 0) {
-                    be.setPorts(PortCodec.decode(ports));
-                }
+                be.setPort(PortCodec.decode(data.ports()));
             }
             be.ensureRegionNow();
         }
@@ -127,29 +124,28 @@ public class PcbBlock extends Block implements EntityBlock {
     }
 
     /**
-     * The level this board drives out of the given world face, or 0 where no output port owns it.
+     * The level this board drives into the world, or 0 when it is not an output bridge.
      *
-     * <p>Direction convention: vanilla's {@code SignalGetter.getDirectSignalTo} asks
-     * {@code getDirectSignal(pos.below(), DOWN)} for the signal arriving at {@code pos} from below, so
-     * the argument names the side the <em>source</em> is on and the returned value is the emission in
-     * the opposite direction. A reader sitting on face {@code direction} therefore asks with that same
-     * {@code direction}, which is what receives the port's level here.
+     * <p>Offered in every direction, like {@code PoweredBlock.getSignal} which returns 15 whichever
+     * side is asked. The bridge has no face, so there is nothing to be aligned: whatever the player wired
+     * to this block receives the level, and a neighbouring PCB answers the same query once it emits,
+     * which is what makes board to world to board work without a special case.
      *
-     * <p>The value is sampled once per server tick by the block entity, so it is at most one tick stale
-     * — the same latency a vanilla comparator reading its container has.
+     * <p>Sampled once per server tick by the block entity, so a value served here is at most one tick
+     * old — the same latency a vanilla comparator reading its container has.
      */
     @Override
     public int getSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
         if (level.getBlockEntity(pos) instanceof PcbBlockEntity be) {
-            return be.outputLevel(direction);
+            return be.outputLevel();
         }
         return 0;
     }
 
     /**
-     * Serves the same level as {@link #getSignal}, so a diode reading this board sees the same number
-     * as a wire or comparator reading it. The board's own circuit is unaffected: this block is in the
-     * world, not in the board dimension, so nothing inside the board can observe it.
+     * Serves the same level as {@link #getSignal}, so a diode reading this board sees the same number a
+     * wire or comparator does. The board's own circuit is unaffected: this block is in the world, not in
+     * the board dimension, so nothing inside the board can observe it.
      */
     @Override
     public int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
@@ -162,12 +158,12 @@ public class PcbBlock extends Block implements EntityBlock {
      * <p>This is load-bearing rather than decorative: {@code SignalGetter.getControlInputSignal}
      * short-circuits to {@code getDirectSignal} only when {@code isSignalSource()} is true
      * ({@code SignalGetter.java:80}), and a diode takes its control input from that path, so without
-     * this a repeater or comparator beside a board would read 0 no matter what the port held.
+     * this a repeater or comparator beside a board would read 0 no matter what the bridge held.
      *
-     * <p>Returning true unconditionally does not make an unported board emit: every one of vanilla's
-     * four consumers ({@code SignalGetter.java:80}, {@code NaturalSpawner}, {@code RailBlock}, and
-     * {@code RedStoneWireBlock}'s observer case) gates its result on the level these methods return,
-     * which is 0 while no output port owns a face. Verified in the 1.21.1 sources rather than assumed.
+     * <p>Returning true unconditionally does not make a board with no output bridge emit: every one of
+     * vanilla's four consumers ({@code SignalGetter.java:80}, {@code NaturalSpawner}, {@code RailBlock},
+     * and {@code RedStoneWireBlock}'s observer case) gates its result on the level these methods return,
+     * which is 0 unless the board's bridge is an output carrying something.
      */
     @Override
     public boolean isSignalSource(BlockState state) {
