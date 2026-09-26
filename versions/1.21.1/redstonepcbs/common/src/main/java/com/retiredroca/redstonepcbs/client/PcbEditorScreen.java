@@ -15,7 +15,8 @@ import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
 import com.retiredroca.redstonepcbs.chip.PortFlow;
-import com.retiredroca.redstonepcbs.chip.BoardPort;
+import com.retiredroca.redstonepcbs.block.TapCell;
+import com.retiredroca.redstonepcbs.chip.BoardTaps;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
 import com.retiredroca.redstonepcbs.data.Blueprint;
 import com.retiredroca.redstonepcbs.data.LibraryData;
@@ -94,11 +95,17 @@ public class PcbEditorScreen extends Screen {
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
     /** Redstone ports, mirroring the server's map so the render agrees with what is stored. */
     /**
-     * This board's single redstone bridge, or {@code null}. No face and no side: the block is powered
-     * from whichever neighbour carries the level, and an output leaves through all six.
+     * This board's two redstone taps: at most one in, at most one out, both able to exist at once. No
+     * face on either -- the block is powered from whichever neighbour carries the level.
      */
+    private BoardTaps taps = BoardTaps.EMPTY;
+
+    /** A short-lived note about the last tap press, or {@code null}. See {@link #setTapStatus}. */
     @Nullable
-    private BoardPort port;
+    private String tapStatus;
+
+    /** When {@link #tapStatus} stops being shown. */
+    private long tapStatusUntil;
     /** A pending port assignment that would displace another cell from a face, awaiting confirmation. */
     private boolean gatewayConfirmOpen;
     private int gatewayConfirmCell = -1;
@@ -227,7 +234,7 @@ public class PcbEditorScreen extends Screen {
         local = GridSerializer.read(data, blockLookup());
         attachFaces.clear();
         attachFaces.putAll(PcbAttach.decode(faces));
-        this.port = PortCodec.decode(ports);
+        this.taps = PortCodec.decode(ports);
     }
 
     private HolderGetter<Block> blockLookup() {
@@ -526,11 +533,15 @@ public class PcbEditorScreen extends Screen {
         // The tap: one cell, outlined in its direction's colour, with a small inner box so it reads as a
         // cell rather than a face. There is no face to outline, because there is no face -- the cell is a
         // source the components placed around it read, which is why the surrounding cells are what matter.
-        if (port != null) {
-            int color = portColor(port);
-            int bx = port.cell() % BoardSpace.SIZE;
-            int bz = (port.cell() / BoardSpace.SIZE) % BoardSpace.SIZE;
-            int by = port.cell() / (BoardSpace.SIZE * BoardSpace.SIZE);
+        for (PortFlow flow : PortFlow.VALUES) {
+            int tapped = taps.cellOf(flow);
+            if (tapped == BoardTaps.NONE) {
+                continue;
+            }
+            int color = portColor(flow);
+            int bx = tapped % BoardSpace.SIZE;
+            int bz = (tapped / BoardSpace.SIZE) % BoardSpace.SIZE;
+            int by = tapped / (BoardSpace.SIZE * BoardSpace.SIZE);
             drawBoxWireframe(graphics, mvp, bx, by, bz, bx + 1, by + 1, bz + 1, color);
             float inset = 0.3F;
             drawBoxWireframe(graphics, mvp, bx + inset, by + inset, bz + inset,
@@ -1322,15 +1333,41 @@ public class PcbEditorScreen extends Screen {
             return;
         }
         PortFlow next;
-        if (port == null || port.cell() != index) {
-            next = PortFlow.IN;
-        } else if (port.flow() == PortFlow.IN) {
-            next = PortFlow.OUT;
-        } else {
-            next = null;
+        PortFlow held = taps.flowAt(index);
+        if (held != null) {
+            // A tapped cell cycles off, and the other direction is untouched.
+            taps = taps.cleared(index);
+            sendTaps();
+            return;
         }
-        port = next == null ? null : new BoardPort(index, next);
-        sendPort(index, next);
+        if (!TapCell.isTap(local[index])) {
+            // Refused before anything moves, and said out loud: a silent no-op here is indistinguishable
+            // from a dead key, which is what made this so hard to see.
+            setTapStatus(TapCell.requirement() + ", not " + local[index].getBlock().getName().getString());
+            return;
+        }
+        next = taps.hasIn() ? PortFlow.OUT : PortFlow.IN;
+        int displaced = taps.cellOf(next);
+        taps = taps.with(next, index);
+        if (displaced != BoardTaps.NONE) {
+            // Moving is one press and is what re-pointing should be, but a tap can vanish silently, so
+            // name the cell that lost one.
+            setTapStatus(next + " tap moved from " + cellLabel(displaced) + " to " + cellLabel(index));
+        } else {
+            setTapStatus(null);
+        }
+        sendTaps();
+    }
+
+    /**
+     * A short-lived note about the last tap press, shown under the help panel.
+     *
+     * <p>Needed because the editor has no transient message area and a client-side log is not visible in
+     * game. Clears itself after a few seconds so a stale refusal is never mistaken for a live one.
+     */
+    private void setTapStatus(@Nullable String message) {
+        tapStatus = message;
+        tapStatusUntil = message == null ? 0 : System.currentTimeMillis() + 4000L;
     }
 
     /** The same warning for a gateway face, which displaces the container using it. */
@@ -1388,16 +1425,23 @@ public class PcbEditorScreen extends Screen {
         }
     }
 
-    /** The colour a bridge is drawn in: green carrying in, orange carrying out. */
-    private static int portColor(BoardPort port) {
-        return port.isInput() ? 0xC060FF60 : 0xC0FF9040;
+    /** The colour a tap is drawn in: green carrying in, orange carrying out. */
+    private static int portColor(PortFlow flow) {
+        return flow == PortFlow.IN ? 0xC060FF60 : 0xC0FF9040;
     }
 
-    private void sendPort(int index, @Nullable PortFlow flow) {
-        int packed = flow == null ? C2SEditPayload.PACKED_NONE : C2SEditPayload.packPort(flow);
+    /**
+     * Sends the whole tap set, not one cell's direction.
+     *
+     * <p>The editor is authoritative for the choice and the server re-checks it, so sending the complete
+     * set means a press that moves or clears a tap can never be interleaved with another player's, and a
+     * refusal comes back as a snapshot that replaces this screen's copy wholesale.
+     */
+    private void sendTaps() {
+        int packed = C2SEditPayload.packTaps(taps);
         RedstonePcbs.platform().sendToServer(kind == C2SEditPayload.KIND_ITEM
-                ? C2SEditPayload.portItem(slot, index, packed)
-                : C2SEditPayload.port(pos, index, packed));
+                ? C2SEditPayload.portItem(slot, packed)
+                : C2SEditPayload.port(pos, packed));
     }
 
     private void sendFace(int index, Dir face) {
@@ -1608,7 +1652,7 @@ public class PcbEditorScreen extends Screen {
         String[] help = {
             "L: place", "Shift+L: erase", "R-click: use", "R: rotate",
             "G: item gateway face",
-            "P: tap this cell (green in, orange out, again to clear)",
+            "P: tap a glass cell (one in, one out)",
         };
         for (int i = 0; i < help.length; i++) {
             graphics.drawString(this.font, help[i], px, y + i * 10, 0x9F9F9F, false);
@@ -1621,6 +1665,18 @@ public class PcbEditorScreen extends Screen {
         graphics.drawString(this.font, skipAssignedFaces
                 ? "  G passes over an assigned face" : "  G asks before taking one",
                 px, y, 0x7F7F7F, false);
+        y += 10;
+        // The tap rule is stated permanently rather than only on refusal, so it can be read before a
+        // press goes nowhere, and the last refusal or move is shown while it still applies.
+        graphics.drawString(this.font, "  P needs " + TapCell.requirement(), px, y, 0x7F7F7F, false);
+        if (tapStatus != null) {
+            if (System.currentTimeMillis() < tapStatusUntil) {
+                y += 10;
+                graphics.drawString(this.font, fit(tapStatus, panelW - 6), px + 8, y, 0xFFE0A0, false);
+            } else {
+                tapStatus = null;
+            }
+        }
     }
 
     private void drawSlot(GuiGraphics graphics, int x, int y, boolean active, boolean hasStock) {
@@ -1917,8 +1973,11 @@ public class PcbEditorScreen extends Screen {
             if (attach != null) {
                 lines.add(Component.literal("gateway: " + attach.name().toLowerCase(java.util.Locale.ROOT)));
             }
-            if (port != null && port.cell() == index) {
-                lines.add(Component.literal("tap: " + (port.isInput() ? "in" : "out")));
+            PortFlow tapHere = taps.flowAt(index);
+            if (tapHere != null) {
+                lines.add(Component.literal("tap: "
+                        + (tapHere == PortFlow.IN ? "in" : "out")
+                        + (TapCell.isTap(state) ? "" : "  (needs glass)")));
             }
             return join(lines);
         }

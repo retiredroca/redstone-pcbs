@@ -7,10 +7,11 @@ import com.retiredroca.redstonepcbs.block.BoardStates;
 import com.retiredroca.redstonepcbs.block.GridSerializer;
 import com.retiredroca.redstonepcbs.block.PcbAttach;
 import com.retiredroca.redstonepcbs.block.PcbBlockEntity;
+import com.retiredroca.redstonepcbs.block.TapCell;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
 import com.retiredroca.redstonepcbs.chip.PortFlow;
-import com.retiredroca.redstonepcbs.chip.BoardPort;
+import com.retiredroca.redstonepcbs.chip.BoardTaps;
 import com.retiredroca.redstonepcbs.chip.Part;
 import com.retiredroca.redstonepcbs.config.PcbsConfig;
 import com.retiredroca.redstonepcbs.craft.Crafting;
@@ -89,13 +90,9 @@ public final class ModNetwork {
                 return;
             }
             case C2SEditPayload.ACTION_SET_PORT -> {
-                PortFlow flow = C2SEditPayload.unpackFlow(payload.packed());
-                BoardPort wanted = flow == null ? null : new BoardPort(payload.index(), flow);
-                if (!be.setPort(wanted)) {
-                    // Only a cell outside the grid reaches here; the editor will not send one, so this
-                    // is a stale client and the snapshot below drops what it just asked for.
-                    LOGGER.info("PCB tap refused on cell {}: outside the grid", payload.index());
-                }
+                // The whole set arrives at once, so a cell that no longer holds glass is dropped by the
+                // entity's own check and logged there; the snapshot below puts the client back in step.
+                be.setTaps(C2SEditPayload.unpackTaps(payload.packed()));
                 be.onEdited();
                 sendBlockSnapshot(player, payload.pos(), be);
                 return;
@@ -112,8 +109,8 @@ public final class ModNetwork {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
                         C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
                     be.clearAttachFace(payload.index());
-                    if (be.port() != null && be.port().cell() == payload.index()) {
-                        be.setPort(null);
+                    if (be.taps().flowAt(payload.index()) != null) {
+                        be.setTaps(be.taps().cleared(payload.index()));
                     }
                 }
                 default -> {
@@ -134,19 +131,19 @@ public final class ModNetwork {
         }
         BlockState[] grid = readGrid(player, stack);
         Map<Integer, Dir> faces = new LinkedHashMap<>(PcbAttach.decode(readFaces(stack)));
-        BoardPort ports = PortCodec.decode(readPorts(stack));
+        BoardTaps ports = PortCodec.decode(readPorts(stack));
         if (payload.action() == C2SEditPayload.ACTION_SET_FACE) {
             applyFace(faces, payload);
         } else if (payload.action() == C2SEditPayload.ACTION_SET_PORT) {
-            ports = applyPort(payload);
+            ports = applyPort(payload, grid);
         } else if (apply(player, grid, payload)) {
             // Placing, clearing or rotating a cell no longer matches its old gateway attachment.
             switch (payload.action()) {
                 case C2SEditPayload.ACTION_SET, C2SEditPayload.ACTION_PLACE,
                         C2SEditPayload.ACTION_CLEAR, C2SEditPayload.ACTION_ROTATE -> {
                     faces.remove(payload.index());
-                    if (ports != null && ports.cell() == payload.index()) {
-                        ports = null;
+                    if (ports.flowAt(payload.index()) != null) {
+                        ports = ports.cleared(payload.index());
                     }
                 }
                 default -> {
@@ -256,16 +253,20 @@ public final class ModNetwork {
     }
 
     /**
-     * Applies a bridge assignment to the item being edited. One bridge, so there is no conflict to
-     * resolve: naming a different cell simply moves it.
+     * Applies a tap assignment to the item being edited. The whole set arrives in one packet, and a tap on
+     * a cell that no longer holds glass is refused here, since an item has no block entity to do it.
      */
-    private static BoardPort applyPort(C2SEditPayload payload) {
-        int index = payload.index();
-        if (index < 0 || index >= GridSerializer.COUNT) {
-            return null;
+    private static BoardTaps applyPort(C2SEditPayload payload, BlockState[] grid) {
+        BoardTaps wanted = C2SEditPayload.unpackTaps(payload.packed());
+        for (PortFlow flow : PortFlow.VALUES) {
+            int cell = wanted.cellOf(flow);
+            if (cell == BoardTaps.NONE || (cell >= 0 && cell < grid.length && TapCell.isTap(grid[cell]))) {
+                continue;
+            }
+            LOGGER.info("PCB tap refused on cell {}: {}", cell, TapCell.requirement());
+            wanted = wanted.with(flow, BoardTaps.NONE);
         }
-        PortFlow flow = C2SEditPayload.unpackFlow(payload.packed());
-        return flow == null ? null : new BoardPort(index, flow);
+        return wanted;
     }
 
     // --- edit application -------------------------------------------------------------------------
@@ -614,8 +615,8 @@ public final class ModNetwork {
             if (faces != null && faces.length > 0) {
                 be.setAttachFaces(PcbAttach.decode(faces));
             }
-            // A design carries no ports, so the target's old ones no longer match its new cells.
-            be.setPort(null);
+            // A design carries no taps, so the target's old ones no longer match its new cells.
+            be.setTaps(BoardTaps.EMPTY);
             be.onEdited();
             sendBlockSnapshot(player, payload.pos(), be);
         }

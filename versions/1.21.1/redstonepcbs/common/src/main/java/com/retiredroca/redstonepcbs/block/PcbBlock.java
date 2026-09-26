@@ -105,7 +105,7 @@ public class PcbBlock extends Block implements EntityBlock {
                 if (faces.length > 0) {
                     be.setAttachFaces(PcbAttach.decode(faces));
                 }
-                be.setPort(PortCodec.decode(data.ports()));
+                be.setTaps(PortCodec.decode(data.ports()));
             }
             be.ensureRegionNow();
         }

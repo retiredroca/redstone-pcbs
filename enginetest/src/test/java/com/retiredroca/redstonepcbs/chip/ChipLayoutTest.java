@@ -41,7 +41,7 @@ class ChipLayoutTest {
     void newLayoutRoundTripsAllThreeSections() {
         byte[] faces = bytes(1, 2, 3, 4, 5, 6);
         byte[] grid = bytes(9, 8, 7, 6, 5);
-        byte[] portBytes = PortCodec.encode(new BoardPort(11, PortFlow.IN));
+        byte[] portBytes = PortCodec.encode(BoardTaps.of(PortFlow.IN, 11));
 
         byte[] packed = ChipLayout.pack(faces, portBytes, grid);
 

@@ -23,13 +23,19 @@ save-persistent redstone board inside a single block.
   ticking so redstone runs with no player nearby, and the border chunks are held loaded without
   ticking. Breaking a board packs the region back into the PCB item; placing it writes it back.
   The dimension's height is a code parameter, so taller boards can be enabled later.
-- **Redstone in and out** - the PCB block itself neither emits nor receives redstone; the board's
-  circuit is self-contained. Nothing in the editor bridges a signal, because vanilla has no way to
-  write a signal level into a real-block region: a level only *emerges* from a container being read
-  by a comparator, so the way to carry a signal across the boundary is to move **items** through the
-  gateway and let a vanilla comparator turn the container's fill into a level on the far side. In
-  practice that means a container inside the board filled from outside (world hoppers push in through
-  the top and side faces) with a comparator on it, and the reverse for the way out.
+- **Redstone in and out** - the PCB block itself is a power source and a power sink, and the level it
+  carries is the real 0-15 from the world rather than a fixed 15. A board has **two taps**: at most one
+  **in** and at most one **out**, and both can exist at the same time, so a single block can take a
+  signal and drive one. A tap is a **glass or tinted glass block** placed in the gap *beside* the
+  component you want bridged - not on it. Vanilla redstone never reads a block's own position to decide
+  its power (a wire calls `getBestNeighborSignal`, a lamp calls `hasNeighborSignal`, a diode reads the
+  cell behind it), so a component on the tap cell itself would see nothing; beside it, it reads the tap
+  as an ordinary neighbour and behaves exactly as it would anywhere else. An **in** tap injects the
+  level the block receives from any of its six neighbours; an **out** tap collects the strongest level
+  in the board around it and offers it to the world from every face. Press `P` on a glass cell to cycle
+  it `in` -&gt; `out` -&gt; clear; assigning a direction that another cell already holds moves it, and the
+  editor names the cell that lost its tap. Taps persist on the block and travel with the PCB item.
+  Item gateways (below) remain a separate mechanism and are not affected by any of this.
 
   > **Untested.** The obvious build for this - a half hopper clock on each side, feeding and draining
   > containers across the gateway to steer the level - has not been built or tested. Treat it as a
@@ -63,8 +69,9 @@ save-persistent redstone board inside a single block.
   yields a transfer. Placing, clearing or rotating a cell clears its attachment (rotate it, then
   re-press `G`). Items crossing the gateway also notify the in-board container, so comparators and
   neighbours reading it update in the board dimension on both loaders. Attachments persist on the
-  block and travel with the PCB item when it is carried. This is **items only** - the PCB block carries
-  no redstone itself, so see *Redstone in and out* above for the item-based workaround.
+  block and travel with the PCB item when it is carried. This is the **item** gateway and is
+  independent of the redstone taps: a board can move items, carry a signal in, or drive one out, and
+  the two mechanisms do not interfere.
 
 The board is a real-block sandbox: any block item can be placed, not just the classic redstone set
 (redstone, torch, repeater, comparator, block of redstone, lever, button, stone, glass, lamp,

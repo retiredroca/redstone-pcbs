@@ -2,8 +2,9 @@ package com.retiredroca.redstonepcbs.block;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
 import com.retiredroca.redstonepcbs.chip.Dir;
+import com.retiredroca.redstonepcbs.chip.BoardTaps;
 import com.retiredroca.redstonepcbs.chip.PortCodec;
-import com.retiredroca.redstonepcbs.chip.BoardPort;
+import com.retiredroca.redstonepcbs.chip.PortFlow;
 import com.retiredroca.redstonepcbs.net.S2COpenEditorPayload;
 import com.retiredroca.redstonepcbs.net.S2CSnapshotPayload;
 
@@ -62,21 +63,22 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     /** Gateway attachments: grid cell index -> the PCB face it is exposed on. */
     private final java.util.Map<Integer, Dir> attachFaces = new java.util.LinkedHashMap<>();
     /**
-     * The board's single redstone bridge, or {@code null}. Either an input or an output, never both,
-     * and with no face: the block is powered from whichever neighbour carries the level.
+     * The board's two redstone taps: at most one input, at most one output, both able to exist at once.
+     * With no face on either -- the block is powered from whichever neighbour carries the level. Never
+     * null: {@link BoardTaps#EMPTY} is the no-taps value.
      */
-    @Nullable
-    private BoardPort port;
+    private BoardTaps taps = BoardTaps.EMPTY;
 
     /**
-     * The level the bridge's cell was last notified about, so the cell is only touched while the bridge
-     * carries something, and once more on the tick it drops to zero. See {@link #notifyPortCell}.
+     * The level the input tap's cell was last notified about, so the cells around it are only touched
+     * while the bridge carries something, and once more on the tick it drops to zero. See
+     * {@link #notifyPortCell}.
      */
     private int lastNotified;
 
     /**
-     * The level this board drives into the world. Written once per server tick by
-     * {@link #publishPort()} and read by {@link PcbBlock#getSignal} in every direction.
+     * The level this board drives into the world, from its output tap. Written once per server tick by
+     * {@link #publishTaps()} and read by {@link PcbBlock#getSignal} in every direction.
      */
     private int outLevel;
 
@@ -167,10 +169,10 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         }
         ensureRegion();
         ensureBoundarySlots();
-        if (port != null) {
-            // Refresh the level crossing the boundary. The bridge serves what is published here, so
+        if (!taps.isEmpty()) {
+            // Refresh the levels crossing the boundary. The bridge serves what is published here, so
             // without this a signal changing in the world would never reach the board.
-            publishPort();
+            publishTaps();
         }
         if (!initialized) {
             initialized = true;
@@ -581,63 +583,95 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
 
     // --- redstone bridge -------------------------------------------------------------------------
 
-    /** This board's single bridge, or {@code null} when it has none. */
-    @Nullable
-    public BoardPort port() {
-        return port;
+    /** This board's two taps. Never {@code null}; {@link BoardTaps#EMPTY} when it has none. */
+    public BoardTaps taps() {
+        return taps;
     }
 
-    /** The port bytes for the snapshot payload. */
+    /** The tap bytes for the snapshot payload. */
     public byte[] portBytes() {
-        return PortCodec.encode(port);
+        return PortCodec.encode(taps);
     }
 
     /**
-     * Sets or clears the bridge. One per board, and it is either an input or an output, never both.
-     * Assigning a different cell simply moves it, since there is nothing to conflict with any more.
+     * Replaces both taps, after checking each against the tap rule.
      *
-     * <p>Any cell in the grid is legal for either direction, so nothing is refused here except an index
-     * outside it. A tap is a source the components around it read, which is why an empty cell is the
-     * normal case rather than a rejected one.
+     * <p>Sanitises per tap rather than rejecting the whole update: a bad cell is dropped with a log line
+     * and a good one still lands, because losing a working input because the output was malformed is a
+     * worse outcome than losing the malformed half. The editor refuses a bad cell before it sends, and
+     * refuses to move, so this path is a stale client or a hand-edited payload.
+     *
+     * <p>A tap that moved or was cleared releases the cells it used to drive. Without that notification an
+     * input removed while it was carrying would latch the circuit on permanently.
+     *
+     * @return whether the stored taps changed, so the caller knows whether to re-publish
      */
-    public boolean setPort(@Nullable BoardPort replacement) {
-        if (replacement != null
-                && (replacement.cell() < 0 || replacement.cell() >= GridSerializer.COUNT)) {
+    public boolean setTaps(BoardTaps replacement) {
+        BoardTaps wanted = sanitise(replacement == null ? BoardTaps.EMPTY : replacement);
+        if (wanted.equals(taps)) {
             return false;
         }
-        if (java.util.Objects.equals(port, replacement)) {
-            return true;
-        }
-        int previous = port == null ? -1 : port.cell();
-        port = replacement;
-        if (previous >= 0 && (replacement == null || replacement.cell() != previous)) {
-            // The cell that lost the bridge must stop being lit by it, or a removed input would latch
-            // the circuit on. One notification, through the live path.
-            ServerLevel board = pcbLevel();
-            BoardSpace space = space();
-            if (board != null && space != null) {
-                notifyPortCell(board, previous, space.pos(previous), 0);
+        ServerLevel board = pcbLevel();
+        BoardSpace space = space();
+        if (board != null && space != null) {
+            // Release any cell that used to be an input and no longer is, before adopting the new set.
+            for (PortFlow flow : PortFlow.VALUES) {
+                int before = taps.cellOf(flow);
+                if (before != BoardTaps.NONE && wanted.cellOf(flow) != before) {
+                    notifyPortCell(board, before, space.pos(before), 0);
+                }
             }
         }
-        publishPort();
+        taps = wanted;
+        publishTaps();
         setChanged();
         return true;
     }
 
     /**
-     * Samples both directions and hands the result to the signal bridge, which serves it to vanilla's
+     * Drops any tap whose cell is outside the grid or is not glass, naming each in the log.
+     *
+     * <p>Called on load as well as on assignment, so a board saved before the glass rule existed loses the
+     * tap rather than keeping one that can never fire. Said out loud, because a silently vanished port is
+     * exactly the failure this project keeps paying for.
+     */
+    private BoardTaps sanitise(BoardTaps candidate) {
+        BlockState[] grid = grid();
+        BoardTaps result = candidate;
+        for (PortFlow flow : PortFlow.VALUES) {
+            int cell = candidate.cellOf(flow);
+            if (cell == BoardTaps.NONE) {
+                continue;
+            }
+            if (cell < 0 || cell >= GridSerializer.COUNT) {
+                LOGGER.warn("PCB {}: dropping the {} tap on cell {}, which is outside the grid",
+                        worldPosition, flow, cell);
+                result = result.with(flow, BoardTaps.NONE);
+            } else if (!TapCell.isTap(grid[cell])) {
+                LOGGER.warn("PCB {}: dropping the {} tap on cell {}, which does not hold glass",
+                        worldPosition, flow, cell);
+                result = result.with(flow, BoardTaps.NONE);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Samples both taps and hands the results to the signal bridge, which serves them to vanilla's
      * signal reads in the board. The board dimension is where those reads happen and this block entity
      * lives in the world, so the bridge keeps its own server-scoped map keyed by level.
      *
-     * <p>One port, so one sample. An input reads the level the PCB receives from the world; an output
-     * reads the level the bridge's own cell is driving in the board.
+     * <p>One entry per tap, and the two are independent: the registry already holds a map and already
+     * serves only an input, so an input and an output coexist. The input is the one that needs telling
+     * its neighbours the level moved, because the output is read out of the board rather than driven into
+     * it.
      */
-    private void publishPort() {
+    private void publishTaps() {
         ServerLevel board = pcbLevel();
         BoardSpace space = space();
-        if (board == null || space == null || level == null || port == null) {
+        if (board == null || space == null || level == null || taps.isEmpty()) {
             // No region means no cell positions, so there is nothing to serve. Publishing an empty map
-            // also drops any bridge a previous region of this board registered.
+            // also drops any taps a previous region of this board registered.
             if (board != null) {
                 SignalBridge.publish(board, java.util.Map.of());
             }
@@ -645,19 +679,29 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             lastNotified = 0;
             return;
         }
-        BlockPos cellPos = space.pos(port.cell());
+        java.util.Map<BlockPos, SignalBridge.Served> served = new java.util.LinkedHashMap<>();
         outLevel = 0;
-        int carried;
-        if (port.isInput()) {
-            carried = worldLevelIn();
-        } else {
-            carried = sampleOutput(board, cellPos);
-            outLevel = carried;
+        int inCarried = 0;
+        for (PortFlow flow : PortFlow.VALUES) {
+            int cell = taps.cellOf(flow);
+            if (cell == BoardTaps.NONE) {
+                continue;
+            }
+            BlockPos cellPos = space.pos(cell);
+            int carried;
+            if (flow == PortFlow.IN) {
+                carried = worldLevelIn();
+                inCarried = carried;
+            } else {
+                carried = sampleOutput(board, cellPos);
+                outLevel = carried;
+            }
+            served.put(cellPos, new SignalBridge.Served(flow, carried));
+            logTapChange(flow, cell, carried);
         }
-        logPortChange(carried);
-        SignalBridge.publish(board, java.util.Map.of(cellPos, new SignalBridge.Served(port.flow(), carried)));
-        if (port.isInput()) {
-            notifyPortCell(board, port.cell(), cellPos, carried);
+        SignalBridge.publish(board, served);
+        if (taps.hasIn()) {
+            notifyPortCell(board, taps.cellOf(PortFlow.IN), space.pos(taps.cellOf(PortFlow.IN)), inCarried);
         }
     }
 
@@ -703,18 +747,19 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     }
 
     /**
-     * Logs the bridge whenever the level it carries changes. Aimed at answering, in one launch, which of
-     * three things is wrong: a level that never leaves zero means the world is not delivering, a level
-     * that moves while the circuit stays dead means the bridge is not being served, and no line at all
-     * means the port never reached the server.
+     * Logs a tap whenever the level it carries changes. Aimed at answering, in one launch, which of three
+     * things is wrong: a level that never leaves zero means the world is not delivering, a level that
+     * moves while the circuit stays dead means the bridge is not being served, and no line at all means
+     * the tap never reached the server. One signature per direction, so an input and an output both
+     * report without either hiding the other.
      */
-    private void logPortChange(int carried) {
-        String signature = port.cell() + ":" + port.flow() + ":" + carried;
+    private void logTapChange(PortFlow flow, int cell, int carried) {
+        String signature = flow + ":" + cell + ":" + carried;
         if (signature.equals(lastLoggedPort)) {
             return;
         }
         lastLoggedPort = signature;
-        LOGGER.info("PCB {}: bridge cell {} {} carrying {}", worldPosition, port.cell(), port.flow(), carried);
+        LOGGER.info("PCB {}: {} tap at cell {} carrying {}", worldPosition, flow, cell, carried);
     }
 
     /**
@@ -780,7 +825,7 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (!attachFaces.isEmpty()) {
             tag.putByteArray("attach", attachBytes());
         }
-        if (port != null) {
+        if (!taps.isEmpty()) {
             tag.putByteArray("ports", portBytes());
         }
     }
@@ -793,18 +838,13 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
         if (tag.contains("attach")) {
             attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));
         }
-        port = null;
+        taps = BoardTaps.EMPTY;
         lastLoggedPort = null;
         if (tag.contains("ports")) {
             byte[] data = tag.getByteArray("ports");
-            port = PortCodec.decode(data);
-            if (data != null && data.length > 0 && port == null) {
-                // A per-face payload this build cannot read. Said out loud rather than dropped, since
-                // the player will otherwise find a board that silently lost its bridge.
-                LOGGER.warn("PCB {}: dropping a per-face port payload this build cannot read; reassign the bridge in the editor", worldPosition);
-            }
+            taps = sanitise(PortCodec.decode(data));
         }
-        publishPort();
+        publishTaps();
     }
 
     @Override

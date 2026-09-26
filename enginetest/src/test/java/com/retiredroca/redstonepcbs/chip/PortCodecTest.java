@@ -2,132 +2,157 @@ package com.retiredroca.redstonepcbs.chip;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * The single-cell bridge, both directions, through every byte the persistence layer can hand it.
- *
- * <p>There is no face and no side to permute any more, so the cases that used to earn their keep — every
- * face crossed with every side, a cell holding several ports, two cells sharing a face — are gone with
- * the model. What is left is the part that can still be wrong: the cell index surviving a round trip
- * across the 12-bit boundary, the flow surviving a byte, and rubbish being refused rather than read.
+ * The two-tap persistence format, and the two-byte single-tap layout it must keep reading so boards
+ * saved before the second tap existed are not thrown away.
  */
 class PortCodecTest {
 
     @Test
-    @DisplayName("both directions survive a round trip")
-    void roundTripsFlow() {
-        for (PortFlow flow : PortFlow.VALUES) {
-            for (int cell : new int[] {0, 1, 5, 255, 256, 257, 1000, 4095}) {
-                BoardPort port = new BoardPort(cell, flow);
-                assertEquals(port, PortCodec.decode(PortCodec.encode(port)),
-                        "cell " + cell + " flow " + flow);
+    @DisplayName("both taps survive a round trip independently")
+    void roundTripsBoth() {
+        for (int in : new int[] {BoardTaps.NONE, 0, 1, 255, 256, 257, 1000, 4095}) {
+            for (int out : new int[] {BoardTaps.NONE, 0, 7, 256, 4095}) {
+                if (in == out && in != BoardTaps.NONE) {
+                    continue;
+                }
+                BoardTaps taps = new BoardTaps(in, out);
+                assertEquals(taps, PortCodec.decode(PortCodec.encode(taps)),
+                        "in " + in + " out " + out);
             }
         }
     }
 
     @Test
-    @DisplayName("a board with no bridge encodes to nothing at all")
-    void encodesNothingWhenAbsent() {
-        assertSame(PortCodec.EMPTY, PortCodec.encode(null));
-        assertNull(PortCodec.decode(PortCodec.EMPTY));
-        assertNull(PortCodec.decode(null));
+    @DisplayName("no taps encode to four absent bytes, and back to empty")
+    void emptyRoundTrips() {
+        byte[] bytes = PortCodec.encode(BoardTaps.EMPTY);
+        assertEquals(4, bytes.length);
+        assertArrayEquals(new byte[] {-1, -1, -1, -1}, bytes);
+        assertTrue(PortCodec.decode(bytes).isEmpty());
+        assertTrue(PortCodec.decode(PortCodec.EMPTY).isEmpty());
+        assertTrue(PortCodec.decode(null).isEmpty());
     }
 
     @Test
-    @DisplayName("the cell index is read whole across the low/high byte split")
-    void encodesCellIndexAsTwelveBits() {
-        // 4095 is the largest valid index, and its high nibble is the one that would be lost if the
-        // split were a byte boundary rather than a nibble.
-        for (int cell : new int[] {255, 256, 4095}) {
-            byte[] bytes = PortCodec.encode(new BoardPort(cell, PortFlow.OUT));
-            assertEquals(2, bytes.length);
-            assertEquals(cell & 0xFF, bytes[0] & 0xFF);
-            assertEquals((cell >> 8) & 0x0F, (bytes[1] & 0xFF) >>> 4);
+    @DisplayName("a single tap is not the same as two taps")
+    void oneIsNotTwo() {
+        BoardTaps onlyIn = PortCodec.decode(PortCodec.encode(new BoardTaps(10, BoardTaps.NONE)));
+        assertTrue(onlyIn.hasIn());
+        assertFalse(onlyIn.hasOut());
+        BoardTaps onlyOut = PortCodec.decode(PortCodec.encode(new BoardTaps(BoardTaps.NONE, 10)));
+        assertFalse(onlyOut.hasIn());
+        assertTrue(onlyOut.hasOut());
+    }
+
+    @Test
+    @DisplayName("the cell index is read whole across the two-byte split")
+    void readsCellAcrossByteSplit() {
+        for (int index : new int[] {0, 1, 255, 256, 4095}) {
+            byte[] bytes = PortCodec.encode(new BoardTaps(index, BoardTaps.NONE));
+            assertEquals(index & 0xFF, bytes[0] & 0xFF);
+            assertEquals(index >>> 8, bytes[1] & 0xFF);
+            assertEquals(index, PortCodec.decode(bytes).cellOf(PortFlow.IN));
         }
     }
 
     @Test
-    @DisplayName("the flow does not bleed into the cell's high nibble")
-    void flowIsConfinedToTheTopNibble() {
-        for (PortFlow flow : PortFlow.VALUES) {
-            BoardPort decoded = PortCodec.decode(PortCodec.encode(new BoardPort(4095, flow)));
-            assertNotNull(decoded);
-            assertEquals(4095, decoded.cell(), "flow " + flow + " corrupted the cell index");
-            assertSame(flow, decoded.flow());
-        }
-    }
-
-    @Test
-    @DisplayName("a cell outside the grid is refused, and cannot be encoded into one")
+    @DisplayName("a cell outside the grid is refused on both sides")
     void refusesOutOfGridCell() {
-        assertSame(PortCodec.EMPTY, PortCodec.encode(new BoardPort(4096, PortFlow.IN)));
-        assertSame(PortCodec.EMPTY, PortCodec.encode(new BoardPort(-1, PortFlow.IN)));
-        // The index is 12 bits and the grid is 12 bits, so every byte pair decodes inside the grid and
-        // there is no out-of-range value to defend against on the way in. Asserted so that stays true.
-        for (int hi = 0; hi < 256; hi++) {
-            for (int lo = 0; lo < 256; lo++) {
-                BoardPort decoded = PortCodec.decode(new byte[] {(byte) lo, (byte) hi});
-                assertNotNull(decoded);
-                assertTrue(decoded.cell() >= 0 && decoded.cell() < 4096);
-            }
-        }
+        // Encoding drops the out-of-range tap and keeps the valid one beside it, rather than losing both.
+        BoardTaps survived = PortCodec.decode(PortCodec.encode(new BoardTaps(4096, 20)));
+        assertFalse(survived.hasIn());
+        assertEquals(20, survived.cellOf(PortFlow.OUT));
+        BoardTaps keptIn = PortCodec.decode(PortCodec.encode(new BoardTaps(20, 4096)));
+        assertTrue(keptIn.hasIn());
+        assertFalse(keptIn.hasOut(), "the out-of-range output should have been dropped");
+        // Hand-built: 0x1000 has a bit set above the grid's 12, so it is not a cell.
+        assertTrue(PortCodec.decode(new byte[] {0x00, 0x10, (byte) 0xFF, (byte) 0xFF}).isEmpty());
+    }
+
+    @Test
+    @DisplayName("the two-byte single-tap layout still decodes into the right direction")
+    void readsLegacySingleTap() {
+        // The layout that shipped first: [cellLo][cellHi|flow<<4].
+        byte[] twoBytes = legacy(1234, PortFlow.IN);
+        BoardTaps decoded = PortCodec.decode(twoBytes);
+        assertTrue(decoded.hasIn(), "a legacy input should still be an input");
+        assertFalse(decoded.hasOut());
+        assertEquals(1234, decoded.cellOf(PortFlow.IN));
+    }
+
+    @Test
+    @DisplayName("a legacy OUTPUT tap stays an output, not an input")
+    void readsLegacyOutputDirection() {
+        BoardTaps decoded = PortCodec.decode(legacy(10, PortFlow.OUT));
+        assertTrue(decoded.hasOut(), "the legacy flow bit must decide the direction");
+        assertFalse(decoded.hasIn());
+        assertEquals(10, decoded.cellOf(PortFlow.OUT));
     }
 
     @Test
     @DisplayName("truncated rubbish is refused rather than guessed at")
     void refusesTruncated() {
-        assertNull(PortCodec.decode(new byte[] {0x05}));
-        assertNull(PortCodec.decode(new byte[0]));
-        // A cell of 0 with a flow is a perfectly good single byte pair; half of one is not.
-        byte[] full = PortCodec.encode(new BoardPort(0, PortFlow.OUT));
-        assertEquals(full.length, 2);
+        assertTrue(PortCodec.decode(new byte[] {0x05}).isEmpty());
+        assertTrue(PortCodec.decode(new byte[0]).isEmpty());
+        // Two bytes is the legacy single-tap layout and is deliberately readable, not truncated rubbish.
     }
 
     @Test
-    @DisplayName("the flow is what decides which way the level is read, not the cell")
-    void flowSelectsDirection() {
-        BoardPort in = new BoardPort(42, PortFlow.IN);
-        BoardPort out = new BoardPort(42, PortFlow.OUT);
-        assertEquals(42, in.cell());
-        assertEquals(42, out.cell());
-        assertTrue(in.isInput());
-        assertFalse(in.isOutput());
-        assertTrue(out.isOutput());
-        assertFalse(out.isInput());
+    @DisplayName("a corrupt payload naming one cell twice is kept as one tap, not thrown")
+    void survivesDuplicateCell() {
+        // BoardTaps' own constructor refuses both directions on one cell, so the decoder must not
+        // construct one -- a damaged save should lose a direction, not fail to load.
+        BoardTaps decoded = PortCodec.decode(new byte[] {0x05, 0x00, 0x05, 0x00});
+        assertNotNull(decoded);
+        assertEquals(1, (decoded.hasIn() ? 1 : 0) + (decoded.hasOut() ? 1 : 0));
+        assertTrue(decoded.hasIn() || decoded.hasOut());
     }
 
-    @Test
-    @DisplayName("a port needs a flow")
-    void requiresFlow() {
-        assertThrows(IllegalArgumentException.class, () -> new BoardPort(0, null));
+    /** Builds the two-byte single-tap layout as it actually shipped: cell in 12 bits, flow in the low nibble. */
+    private static byte[] legacy(int cell, PortFlow flow) {
+        return new byte[] {
+                (byte) (cell & 0xFF),
+                (byte) ((((cell >> 8) & 0x0F) << 4) | (flow.ordinal() & 0x0F))
+        };
     }
 
     @Test
     @DisplayName("encoding is byte-exact, so two builds cannot disagree about a board")
     void encodingIsStable() {
-        // Guards an accidental format change: a different stride or shift would silently invalidate
-        // every saved board while every round-trip test still passed.
-        assertArrayEquals(new byte[] {0x00, 0x00}, PortCodec.encode(new BoardPort(0, PortFlow.IN)));
-        assertArrayEquals(new byte[] {0x01, 0x01}, PortCodec.encode(new BoardPort(1, PortFlow.OUT)));
-        assertArrayEquals(new byte[] {(byte) 0xFF, 0x00},
-                PortCodec.encode(new BoardPort(255, PortFlow.IN)));
-        // The last cell and the far flow: the case a shift error would truncate.
-        assertArrayEquals(new byte[] {(byte) 0xFF, (byte) 0xF1},
-                PortCodec.encode(new BoardPort(4095, PortFlow.OUT)));
+        assertArrayEquals(new byte[] {0x00, 0x00, (byte) 0xFF, (byte) 0xFF},
+                PortCodec.encode(new BoardTaps(0, BoardTaps.NONE)));
+        assertArrayEquals(new byte[] {(byte) 0xFF, (byte) 0x0F, (byte) 0xFF, (byte) 0xFF},
+                PortCodec.encode(new BoardTaps(4095, BoardTaps.NONE)));
+        assertArrayEquals(new byte[] {0x01, 0x00, 0x02, 0x00},
+                PortCodec.encode(new BoardTaps(1, 2)));
     }
 
-    private static void assertTrue(boolean condition) {
-        org.junit.jupiter.api.Assertions.assertTrue(condition);
+    @Test
+    @DisplayName("a decoded payload always obeys the model's own invariant")
+    void decodedNeverViolatesTheInvariant() {
+        for (int lo = 0; lo < 256; lo++) {
+            for (int hi = 0; hi < 256; hi++) {
+                BoardTaps decoded = PortCodec.decode(
+                        new byte[] {(byte) lo, (byte) hi, (byte) lo, (byte) hi});
+                assertNotNull(decoded);
+                assertFalse(decoded.hasIn() && decoded.cellOf(PortFlow.IN) == decoded.cellOf(PortFlow.OUT),
+                        "both directions on cell " + lo + "," + hi);
+            }
+        }
     }
 
-    private static void assertFalse(boolean condition) {
-        org.junit.jupiter.api.Assertions.assertFalse(condition);
+    @Test
+    @DisplayName("the empty constant is shared, so an absent payload is a true singleton")
+    void emptyConstant() {
+        assertSame(BoardTaps.EMPTY, PortCodec.decode(PortCodec.EMPTY));
     }
 }

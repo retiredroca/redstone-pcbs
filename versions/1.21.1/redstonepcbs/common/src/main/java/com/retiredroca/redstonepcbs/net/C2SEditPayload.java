@@ -1,6 +1,8 @@
 package com.retiredroca.redstonepcbs.net;
 
 import com.retiredroca.redstonepcbs.RedstonePcbs;
+import com.retiredroca.redstonepcbs.chip.BoardTaps;
+import com.retiredroca.redstonepcbs.chip.CellIndex;
 import com.retiredroca.redstonepcbs.chip.Dir;
 import com.retiredroca.redstonepcbs.chip.PortFlow;
 
@@ -44,18 +46,28 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
     /** {@code packed} value meaning "no port". */
     public static final int PACKED_NONE = 0xFF;
 
-    /** Packs a flow into the wire form. */
-    public static int packPort(PortFlow flow) {
-        return flow.ordinal();
+    /**
+     * Packs both taps into one var-int: {@code (outCell+1) << 13 | (inCell+1)}, with 0 meaning neither.
+     *
+     * <p>The whole set travels rather than one cell's direction, so there is no per-direction race between
+     * two presses, and clearing is just two zeroes. 13 bits per cell covers 0..4095 plus the off-by-one
+     * that makes 0 mean absent, and two of them stay inside a positive int so a var-int carries it whole.
+     */
+    public static int packTaps(BoardTaps taps) {
+        BoardTaps t = taps == null ? BoardTaps.EMPTY : taps;
+        int in = t.cellOf(PortFlow.IN);
+        int out = t.cellOf(PortFlow.OUT);
+        return ((out + 1) << 13) | (in + 1);
     }
 
-    /** Reads a packed flow, or {@code null} when it is cleared or malformed. */
-    @Nullable
-    public static PortFlow unpackFlow(int packed) {
-        if (packed == PACKED_NONE || (packed & ~0x1) != 0) {
-            return null;
-        }
-        return PortFlow.byOrdinal(packed);
+    /** Reads a packed tap set. Cells outside the grid become absent rather than being clamped. */
+    public static BoardTaps unpackTaps(int packed) {
+        int in = (packed & 0x1FFF) - 1;
+        int out = ((packed >>> 13) & 0x1FFF) - 1;
+        BoardTaps decoded = new BoardTaps(
+                CellIndex.valid(in) ? in : BoardTaps.NONE,
+                CellIndex.valid(out) ? out : BoardTaps.NONE);
+        return decoded;
     }
 
     public static final int FLAG_SUBTRACT = 1;
@@ -117,14 +129,17 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
         return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_SET_FACE, index, face & 0xFF, "");
     }
 
-    /** Assigns/clears the redstone bridge on a placed board. */
-    public static C2SEditPayload port(BlockPos pos, int index, int packed) {
-        return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_SET_PORT, index, packed, "");
+    /**
+     * Replaces both redstone taps on a placed board. {@code packed} carries the whole set, so {@code index}
+     * is unused and left at -1.
+     */
+    public static C2SEditPayload port(BlockPos pos, int packed) {
+        return new C2SEditPayload(KIND_BLOCK, pos, 0, ACTION_SET_PORT, -1, packed, "");
     }
 
-    /** Assigns/clears the redstone bridge on a portable board. */
-    public static C2SEditPayload portItem(int slot, int index, int packed) {
-        return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_SET_PORT, index, packed, "");
+    /** Replaces both redstone taps on a portable board. */
+    public static C2SEditPayload portItem(int slot, int packed) {
+        return new C2SEditPayload(KIND_ITEM, BlockPos.ZERO, slot, ACTION_SET_PORT, -1, packed, "");
     }
 
     public int part() {
