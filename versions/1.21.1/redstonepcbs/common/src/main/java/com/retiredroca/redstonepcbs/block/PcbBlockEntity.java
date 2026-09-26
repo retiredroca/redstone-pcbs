@@ -82,9 +82,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
      */
     private int outLevel;
 
-    /** The last logged {@code cell:flow:level}, so the diagnostic reports changes rather than every tick. */
-    @Nullable
-    private String lastLoggedPort;
 
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("redstonepcbs");
 
@@ -708,7 +705,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
                 outLevel = carried;
             }
             served.put(cellPos, new SignalBridge.Served(flow, carried));
-            logTapChange(flow, cell, carried);
         }
         SignalBridge.publish(board, served);
         if (taps.hasIn()) {
@@ -778,22 +774,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
     }
 
     /**
-     * Logs a tap whenever the level it carries changes. Aimed at answering, in one launch, which of three
-     * things is wrong: a level that never leaves zero means the world is not delivering, a level that
-     * moves while the circuit stays dead means the bridge is not being served, and no line at all means
-     * the tap never reached the server. One signature per direction, so an input and an output both
-     * report without either hiding the other.
-     */
-    private void logTapChange(PortFlow flow, int cell, int carried) {
-        String signature = flow + ":" + cell + ":" + carried;
-        if (signature.equals(lastLoggedPort)) {
-            return;
-        }
-        lastLoggedPort = signature;
-        LOGGER.info("PCB {}: {} tap at cell {} carrying {}", worldPosition, flow, cell, carried);
-    }
-
-    /**
      * Tells the components around the tap that its level may have changed, so vanilla redstone beside it
      * re-reads. Only for a bridge that is actually carrying something.
      *
@@ -807,12 +787,12 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
      * placed in it is ever powered by the bridge, and its contents are bypassed for emission. Only the
      * cells that read it matter.
      *
-     * <p>Each neighbour is updated as though it had changed, which is what vanilla's
-     * {@code updateNeighborsAt} would do -- except that in 1.21.1 that method, like
-     * {@code Level.neighborChanged}, compiles to a bare {@code return}. They are vestigial, kept for
-     * compatibility, and the live architecture routes updates through the {@link NeighborUpdater} held
-     * on {@code Level}. Calling either is silently a no-op. Verified in the bytecode of the mapped jar,
-     * not the decompiled sources, which show the same empty bodies and read as if they were implemented.
+     * <p>Each neighbour is updated as though it had changed, which is what a placement does. This goes
+     * straight to {@link NeighborUpdater#executeUpdate} because that is the entry point the server-side
+     * overrides resolve to anyway: {@code Level.neighborChanged} and {@code Level.updateNeighborsAt} are
+     * empty stubs on {@code Level} itself, and {@code ServerLevel} overrides both to delegate to the
+     * {@code NeighborUpdater} it holds. Calling either on a level would reach the same place, so this is
+     * a direct route rather than a workaround. Verified in the bytecode of both classes.
      *
      * <p>A torch beside the tap reacts, and that is correct: this notification says "your neighbour's
      * output changed", which is exactly what a torch's burnout logic is asking about. The one tick after a
@@ -870,7 +850,6 @@ public class PcbBlockEntity extends BlockEntity implements WorldlyContainer, Hop
             attachFaces.putAll(PcbAttach.decode(tag.getByteArray("attach")));
         }
         taps = BoardTaps.EMPTY;
-        lastLoggedPort = null;
         if (tag.contains("ports")) {
             byte[] data = tag.getByteArray("ports");
             // Only the cell index is judged here. The board lives in another dimension, and at this point

@@ -65,8 +65,6 @@ public final class SignalBridge {
         }
     }
 
-    /** Set once, the first time a board signal read is intercepted. Proof the mixin applied. */
-    private static boolean seenRead;
 
     private SignalBridge() {}
 
@@ -108,11 +106,6 @@ public final class SignalBridge {
         boardLevel = null;
     }
 
-    /** How many ports are registered on a level. Diagnostics only. */
-    public static int count(BlockGetter level) {
-        Map<BlockPos, Served> ports = PORTS.get(level);
-        return ports == null ? 0 : ports.size();
-    }
 
     /**
      * The level the tapped cell emits toward {@code dir} as an input, or {@code null} when the cell is
@@ -139,7 +132,6 @@ public final class SignalBridge {
         if (!isBoard(level)) {
             return null;
         }
-        markSeenRead();
         Map<BlockPos, Served> ports = PORTS.get(level);
         if (ports == null) {
             return null;
@@ -157,20 +149,4 @@ public final class SignalBridge {
         return served.level();
     }
 
-    /**
-     * Records that a board signal read was intercepted. The line appears exactly once per session and
-     * is the only positive evidence that the mixin resolved: a mixin that failed to apply would
-     * otherwise be indistinguishable from one that is simply doing nothing.
-     */
-    private static void markSeenRead() {
-        if (!seenRead) {
-            seenRead = true;
-            LOGGER.info("PCB redstone bridge: intercepting board signal reads");
-        }
-    }
-
-    /** Test/diagnostic hook: forget that a read was seen, so the log line can be observed again. */
-    public static void resetSeenRead() {
-        seenRead = false;
-    }
 }

@@ -38,10 +38,12 @@ save-persistent redstone board inside a single block.
   licence: from the component onward the signal is whatever vanilla does with it, so a dust run leading
   away from a tap still loses 1 per block and a repeater is needed to put the level back, exactly as in
   any other circuit. A tap is one full-strength source at one point, not a lossless wire.
-  Press `P` on a glass cell to cycle
-  it `in` -&gt; `out` -&gt; clear; assigning a direction that another cell already holds moves it, and the
-  editor names the cell that lost its tap. Taps persist on the block and travel with the PCB item.
-  Item gateways (below) remain a separate mechanism and are not affected by any of this.
+  Press `P` on a glass cell to tap it **in**, or `Shift+P` to tap it **out** - the direction is chosen,
+  never inferred, so a board can be output-only, input-only, both, or neither. Press the same key again
+  to clear the tap, or the other one to flip it. Assigning a direction another cell already holds moves
+  it, and the editor names the cell that lost its tap. Taps persist on the block, travel with the PCB
+  item, and are carried by saved and shared designs. Item gateways (below) remain a separate mechanism
+  and are not affected by any of this.
 
   > **Untested.** The obvious build for this - a half hopper clock on each side, feeding and draining
   > containers across the gateway to steer the level - has not been built or tested. Treat it as a
@@ -54,8 +56,9 @@ save-persistent redstone board inside a single block.
 - **Sharing designs** - the Library panel has **Exp** to export a design as JSON to
   `redstonepcbs/blueprints/<name>.json` inside the game folder (so it lands in the player's own files,
   on a server or single-player), and **Import** to read files back from there. A blueprint is a small
-  JSON document (name + base64 grid + gateway attachments), so designs can be copied between worlds
-  and players; older grid-only files still import, just without their gateway faces. **Share** pushes a
+  JSON document (name + base64 grid + gateway attachments + redstone taps), so designs can be copied
+  between worlds and players with their porting intact; older files still import, just without the
+  sections they predate. **Share** pushes a
   saved design straight into another online player's library, stamped with your name, and it appears
   in their list as an ordinary editable entry. Importing is free (no paper) but still counts against
   the per-player limit; set `allowImport` to `false` in the config to disable it.

@@ -43,8 +43,6 @@ public record C2SEditPayload(int kind, BlockPos pos, int slot, int action, int i
      */
     public static final int ACTION_SET_PORT = 17;
 
-    /** {@code packed} value meaning "no port". */
-    public static final int PACKED_NONE = 0xFF;
 
     /**
      * Packs both taps into one var-int: {@code (outCell+1) << 13 | (inCell+1)}, with 0 meaning neither.
