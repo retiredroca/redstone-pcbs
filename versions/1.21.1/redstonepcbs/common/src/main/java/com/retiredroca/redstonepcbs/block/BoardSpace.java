@@ -1,5 +1,7 @@
 package com.retiredroca.redstonepcbs.block;
 
+import com.retiredroca.redstonepcbs.chip.CellIndex;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
@@ -15,7 +17,7 @@ import net.minecraft.world.level.block.state.BlockState;
  */
 public final class BoardSpace {
     /** Editable grid edge length. */
-    public static final int SIZE = 16;
+    public static final int SIZE = CellIndex.SIZE;
 
     private final ServerLevel level;
     private final ChunkPos chunk;
@@ -41,19 +43,19 @@ public final class BoardSpace {
     }
 
     public static int index(int x, int y, int z) {
-        return (y * SIZE + z) * SIZE + x;
+        return CellIndex.index(x, y, z);
     }
 
     public static int xOf(int index) {
-        return index % SIZE;
+        return CellIndex.xOf(index);
     }
 
     public static int yOf(int index) {
-        return index / (SIZE * SIZE);
+        return CellIndex.yOf(index);
     }
 
     public static int zOf(int index) {
-        return (index / SIZE) % SIZE;
+        return CellIndex.zOf(index);
     }
 
     public BlockPos pos(int x, int y, int z) {
