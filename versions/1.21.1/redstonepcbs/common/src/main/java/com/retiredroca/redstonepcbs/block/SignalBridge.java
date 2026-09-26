@@ -47,6 +47,14 @@ public final class SignalBridge {
      * <p>The cell is served to every direction. There is no face to be aligned with any more: an input
      * arrives at the PCB from whichever neighbour carries it, so the cell hands the level to whatever in
      * the circuit reads it, and an output leaves through all six faces.
+     *
+     * <p><b>No attenuation, deliberately.</b> The level stored here is handed back unchanged, so whatever
+     * reads the tapped cell gets the full level at any distance — the same bargain a redstone block makes,
+     * since {@code PoweredBlock.getSignal} returns 15 whichever side is asked. A tap is a source at a
+     * point, not a lossless wire: once the level is in the circuit it is vanilla's, and a dust run leading
+     * away still loses 1 per block and needs a repeater to put it back. Do not add decay here to
+     * "balance" it; the level arriving from the world is already whatever the source produced, and
+     * weakening it here would silently disagree with the block's own emission.
      */
     public record Served(PortFlow flow, int level) {
         public Served {

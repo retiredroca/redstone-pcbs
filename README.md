@@ -32,7 +32,13 @@ save-persistent redstone board inside a single block.
   cell behind it), so a component on the tap cell itself would see nothing; beside it, it reads the tap
   as an ordinary neighbour and behaves exactly as it would anywhere else. An **in** tap injects the
   level the block receives from any of its six neighbours; an **out** tap collects the strongest level
-  in the board around it and offers it to the world from every face. Press `P` on a glass cell to cycle
+  in the board around it and offers it to the world from every face. **The tap does not decay the
+  signal** - whatever reads the tapped cell gets the full level it carries, at any distance, exactly as
+  a block of redstone hands out 15 to all six of its sides. That is a property of the tap only, not a
+  licence: from the component onward the signal is whatever vanilla does with it, so a dust run leading
+  away from a tap still loses 1 per block and a repeater is needed to put the level back, exactly as in
+  any other circuit. A tap is one full-strength source at one point, not a lossless wire.
+  Press `P` on a glass cell to cycle
   it `in` -&gt; `out` -&gt; clear; assigning a direction that another cell already holds moves it, and the
   editor names the cell that lost its tap. Taps persist on the block and travel with the PCB item.
   Item gateways (below) remain a separate mechanism and are not affected by any of this.

@@ -17,6 +17,8 @@ import net.minecraft.world.level.block.state.BlockState;
  *       passes -- which means vanilla wire draws its connection to it. The port is visible in the world
  *       render, not only in the editor's overlay.
  *   <li><b>It is never a signal source,</b> so nothing placed in a tapped cell can conflict with the tap.
+ *       A tap delivers the level <em>unchanged</em> to whatever reads it — it does not decay it — which is
+ *       what makes a tapped cell behave as a source at a point rather than as a length of wire.
  *       The tap's cell is a source that the components <em>around</em> it read; its own contents are
  *       bypassed, and glass having no signal of its own makes that unambiguous.
  * </ul>
