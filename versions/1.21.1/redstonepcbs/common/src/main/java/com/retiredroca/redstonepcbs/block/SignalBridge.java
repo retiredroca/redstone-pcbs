@@ -106,12 +106,46 @@ public final class SignalBridge {
      * The level this cell emits toward {@code dir} as an input port, or {@code null} when the cell is
      * not an input port and vanilla's own answer must stand.
      *
+     * <p>Served on all six directions. The port's recorded side is which <em>world</em> face the port
+     * belongs to — place against the south face and the side is south — not a direction the injected
+     * level is confined to. Gating reads on it made the bridge silently return null whenever the
+     * circuit was routed along any other axis, with no way for the player to see why.
+     *
      * <p>The same answer serves weak and strong power. The world-side read that produced the level is
      * an ordinary signal query with no weak/strong distinction, so inventing one here would make the
      * bridge report a strength the source never had.
      */
     @Nullable
     public static Integer levelAt(BlockGetter level, BlockPos pos, Direction dir) {
+        return servedLevel(level, pos);
+    }
+
+    /**
+     * The level an input port injects into whatever block sits on the port's own cell, or
+     * {@code null} when the cell is not an input port.
+     *
+     * <p>This is the half that was missing. {@link #levelAt} answers "what does this cell emit", which
+     * only reaches the blocks <em>around</em> the port: vanilla redstone computes a block's power by
+     * reading its six neighbours ({@code RedStoneWireBlock.calculateTargetStrength} calls
+     * {@code getBestNeighborSignal}, which reads {@code getSignal(pos.relative(dir), dir)}), so a wire
+     * sitting on the port cell never reads its own position and could never light. The port needs to
+     * reach the block it is assigned to, not only its surroundings.
+     *
+     * <p>So the reader-side queries need the reader's position, which the signal-read injection point
+     * does not carry. {@code getBestNeighborSignal}, {@code hasNeighborSignal} and
+     * {@code getDirectSignalTo} all take the reader's own position, and folding the port's level in
+     * there makes the cell behave exactly as if a vanilla signal source stood beside it.
+     *
+     * <p>Reads the level out of the registry and never re-queries the level, so a port cell that is
+     * its own neighbour cannot re-enter this path.
+     */
+    @Nullable
+    public static Integer levelForCell(BlockGetter level, BlockPos cell) {
+        return servedLevel(level, cell);
+    }
+
+    @Nullable
+    private static Integer servedLevel(BlockGetter level, BlockPos pos) {
         if (!isBoard(level)) {
             return null;
         }
@@ -124,15 +158,10 @@ public final class SignalBridge {
         if (served == null) {
             return null;
         }
-        // Only an input port is served here. An output port is read out of the board by the block
-        // entity, not injected into it, so its cell keeps vanilla's own answer.
+        // Only an input port injects into the board. An output port is read out of the board by the
+        // block entity, so its cell keeps vanilla's own answer and a board reading its own output
+        // stays a no-op rather than a feedback loop.
         if (!served.port().isInput()) {
-            return null;
-        }
-        // Only the linked side bridges; a read from any other side is the component's own behaviour.
-        // The port records a chip Dir, so convert before comparing with the vanilla Direction.
-        Direction side = Directions.toMinecraft(served.port().side());
-        if (side != dir && side != dir.getOpposite()) {
             return null;
         }
         return served.level();
