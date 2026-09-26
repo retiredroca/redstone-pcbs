@@ -31,7 +31,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * supplies only the injection points.
  */
 @Mixin(SignalGetter.class)
-public abstract class SignalGetterMixin {
+public interface SignalGetterMixin {
 
     @Inject(method = "getBestNeighborSignal", at = @At("RETURN"), cancellable = true)
     private void redstonepcbs$bridgePortCellBestNeighbor(BlockPos pos, CallbackInfoReturnable<Integer> cir) {
