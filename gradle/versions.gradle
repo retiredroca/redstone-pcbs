@@ -114,6 +114,15 @@ if (moduleFile != null) {
     ext.mod_version = stampVersion(componentVersions.getProperty(ext.mod_id))
 }
 
+// Release jar name: <mod-id>-<version>-<loader>.jar, e.g. redstonepcbs-1.0.1.26092517-fabric.jar.
+// The loader designation is the trailing element, matching the universal jar's own
+// "-universal" suffix, so all three release jars read alike. This is the one copy of the convention:
+// the root build's jar lookups and each loader build's sweep keep-set both come from here, so the two
+// cannot drift apart (they did once, when each side spelled "<loader>-<id>-<version>.jar" itself).
+// The id and version are parameters because the root project has no module.properties above it, so
+// mod_id/mod_version are undefined there; it passes the per-module values it already reads.
+ext.jarFileName = { String id, String version, String loader -> "${id}-${version}-${loader}.jar" }
+
 // Version stamps are fixed-width YYMMDDHH, so lexical max == most recent.
 ext.stampOf = { String v -> v.tokenize('.').last() as String }
 ext.newestStamp = { List<String> versions -> versions.collect { stampOf(it) }.max() }

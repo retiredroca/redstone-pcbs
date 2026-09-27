@@ -64,8 +64,11 @@ sourceSets {
 }
 
 base {
-    archivesName = 'neoforge-' + mod_id
+    // The jar is named <mod-id>-<version>-neoforge.jar (see jarFileName in gradle/versions.gradle),
+    // so archivesName is the bare mod id and the loader is the trailing classifier.
+    archivesName = mod_id
 }
+tasks.named('jar') { archiveClassifier = 'neoforge' }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(java_version)
 
@@ -142,7 +145,7 @@ tasks.named('build') {
             return
         }
         def name = base.archivesName.get()
-        def keep = ["${name}-${project.version}.jar".toString()] as Set
+        def keep = [jarFileName(mod_id, mod_version, 'neoforge').toString()] as Set
         libs.listFiles()?.each { f ->
             if (f.isFile() && f.name.endsWith('.jar') && !keep.contains(f.name)) {
                 f.delete()

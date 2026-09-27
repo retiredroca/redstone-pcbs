@@ -36,8 +36,8 @@ moduleDirs.each { moduleDir ->
     def id = props.getProperty('id')
     def groupPath = props.getProperty('group').replace('.', '/')
     def modVersion = stampVersion(componentVersions.getProperty(id))
-    def fabricJar = { versionedJar("${versionRoot}/${moduleDir.name}/fabric/build/libs/fabric-${id}-${modVersion}.jar") }
-    def neoforgeJar = { versionedJar("${versionRoot}/${moduleDir.name}/neoforge/build/libs/neoforge-${id}-${modVersion}.jar") }
+    def fabricJar = { versionedJar("${versionRoot}/${moduleDir.name}/fabric/build/libs/${jarFileName(id, modVersion, 'fabric')}") }
+    def neoforgeJar = { versionedJar("${versionRoot}/${moduleDir.name}/neoforge/build/libs/${jarFileName(id, modVersion, 'neoforge')}") }
 
     def t = tasks.register("universalJar_${id.replaceAll('[^A-Za-z0-9]', '_')}", Jar) {
         dependOnBuilds(delegate, id)
@@ -75,8 +75,8 @@ def loaderJarSources = { org.gradle.api.tasks.Sync t ->
         def modVersion = stampVersion(componentVersions.getProperty(id))
         activeLoaders.each { loader ->
             t.dependsOn gradle.includedBuild("${id}-${loader}").task(':build')
-            t.from({ versionedJar("${versionRoot}/${moduleDir.name}/${loader}/build/libs/${loader}-${id}-${modVersion}.jar") }) {
-                rename { "${loader}-${id}-${modVersion}.jar" }
+            t.from({ versionedJar("${versionRoot}/${moduleDir.name}/${loader}/build/libs/${jarFileName(id, modVersion, loader)}") }) {
+                rename { jarFileName(id, modVersion, loader) }
             }
         }
     }

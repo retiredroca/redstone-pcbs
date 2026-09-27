@@ -13,8 +13,15 @@ version = mod_version
 group = mod_group_id
 
 base {
-    archivesName = 'fabric-' + mod_id
+    // The jar is named <mod-id>-<version>-fabric.jar (see jarFileName in gradle/versions.gradle), so
+    // archivesName is the bare mod id and the loader is the trailing classifier.
+    archivesName = mod_id
 }
+// Loom's remapJar, not jar, writes the final artifact, and it does NOT inherit archiveClassifier
+// from jar - it produced the unclassified "redstonepcbs-<version>.jar" until this was set here too.
+// The loader build's sweep and the root build's lookups both expect the classified name.
+tasks.named('jar') { archiveClassifier = 'fabric' }
+tasks.named('remapJar') { archiveClassifier = 'fabric' }
 
 // The shared sources are compiled once per loader. To let a single merged jar hold both the Fabric
 // (intermediary) and NeoForge (Mojang) variants, each loader gets its own copy of the common classes
@@ -107,7 +114,7 @@ tasks.named('build') {
             return
         }
         def name = base.archivesName.get()
-        def keep = ["${name}-${project.version}.jar".toString(),
+        def keep = [jarFileName(mod_id, mod_version, 'fabric').toString(),   // .toString(): a GString never equals its String
                     "${name}-${project.version}-sources.jar".toString(),
                     "${name}-${project.version}-dev.jar".toString()] as Set
         libs.listFiles()?.each { f ->
