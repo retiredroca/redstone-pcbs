@@ -34,14 +34,17 @@ ext.componentVersions = componentVersions
 // release) or an already-stamped "<major>.<minor>.<patch>.<yymmddhh>" (after one). A bare value is
 // stamped here, in the project's stamp timezone (TIMEZONE in tools/versioning.py), so built jars
 // always carry the full version. Override with -PversionStamp=<stamp>; disable with -Pnostamp=true.
-def stampTimezone = {
+// Read a module-level string constant out of tools/versioning.py, so the value is declared once in
+// python rather than duplicated here where the two can silently drift apart.
+def pyConst = { String name, String fallback ->
     def f = findUp('tools/versioning.py')
     if (f == null) {
-        return 'UTC'
+        return fallback
     }
-    def m = f.getText('UTF-8') =~ /(?m)^TIMEZONE\s*=\s*"([^"]+)"/
-    return m.find() ? m.group(1) : 'UTC'
+    def m = f.getText('UTF-8') =~ /(?m)^${name}\s*=\s*"([^"]+)"/
+    return m.find() ? m.group(1) : fallback
 }
+def stampTimezone = { pyConst('TIMEZONE', 'UTC') }
 def fixedOffsetZone = { String name ->
     def t = name.trim().toUpperCase()
     if (t in ['UTC', 'Z', 'GMT']) {
@@ -123,13 +126,9 @@ if (moduleFile != null) {
 // mod_id/mod_version are undefined there; it passes the per-module values it already reads.
 ext.jarFileName = { String id, String version, String loader -> "${id}-${version}-${loader}.jar" }
 
-// Version stamps are fixed-width YYMMDDHH, so lexical max == most recent.
-ext.stampOf = { String v -> v.tokenize('.').last() as String }
-ext.newestStamp = { List<String> versions -> versions.collect { stampOf(it) }.max() }
-
 // A dependency's floor range: [<major.minor.patch>,<upper>). Unused in a single-mod project, but
 // kept so the loader builds share one script shape with the multi template.
-ext.floorUpper = '1.1'   // keep in step with versioning.py's FLOOR_UPPER
+ext.floorUpper = pyConst('FLOOR_UPPER', '1.1')   // single source: tools/versioning.py
 ext.moduleFloor = { String id ->
     def version = componentVersions.getProperty(id)
     if (version == null) {

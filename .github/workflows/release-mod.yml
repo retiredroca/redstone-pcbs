@@ -170,7 +170,9 @@ jobs:
           cp dist/*.jar build/libs/
 
       # Safety net: only the expected release jars may be published, and all of them must be there.
-      # The count is computed from the project's own modules, never hardcoded.
+      # The count is computed from the project's own modules, never hardcoded. `allowed=` is the same
+      # shape the build writes -- <id>-<version>-<loader>.jar, dashes allowed in the id so a `bundle-`
+      # prefix matches -- so a stale jar from an earlier naming scheme fails here instead of shipping.
       - name: Verify release jar set
         run: |
           set -euo pipefail
@@ -180,7 +182,7 @@ jobs:
           import release
           print(release.expected_jars('${MC_VERSION}'))
           ")
-          allowed='^(universal-|fabric-|neoforge-)?[A-Za-z0-9_]+([_-][A-Za-z0-9_]+)*\.[0-9].*\.jar$'
+          allowed='^[A-Za-z0-9_-]+-[0-9][0-9.]*-(fabric|neoforge|universal)\.jar$'
           bad=$(ls -1 dist | grep -vE "$allowed" || true)
           if [ -n "$bad" ]; then
             echo "Unexpected file(s) in dist/ (refusing to publish):" >&2
@@ -278,7 +280,7 @@ jobs:
         with:
           curseforge-id: 
           curseforge-token: ${{ secrets.CURSEFORGE_API_KEY }}
-          curseforge-files: dist/${PRIMARY}.${PRIMARY_VERSION}-universal.jar
+          curseforge-files: dist/${PRIMARY}-${PRIMARY_VERSION}-universal.jar
           curseforge-dependencies: fabric-api(required){modrinth:P7dR8mSH}{curseforge:306612}
           name: ${{ env.PRIMARY }} ${{ env.PRIMARY_VERSION }}
           version: ${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}
@@ -305,7 +307,7 @@ jobs:
           ./.github/scripts/modrinth-sync.sh \
             "${MODRINTH_ID}" \
             "mr.${PRIMARY}.version.${MC_VERSION}" "${PRIMARY_VERSION}" "${PRIMARY} ${PRIMARY_VERSION}" \
-            "dist/${PRIMARY}.${PRIMARY_VERSION}-universal.jar"
+            "dist/${PRIMARY}-${PRIMARY_VERSION}-universal.jar"
 
       # --- Persist the bumped version / learned Modrinth id back to main -----------------------
       - name: Commit version + release state

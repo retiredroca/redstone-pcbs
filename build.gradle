@@ -41,7 +41,7 @@ moduleDirs.each { moduleDir ->
 
     def t = tasks.register("universalJar_${id.replaceAll('[^A-Za-z0-9]', '_')}", Jar) {
         dependOnBuilds(delegate, id)
-        archiveFileName = "${id}-${modVersion}-universal.jar"
+        archiveFileName = jarFileName(id, modVersion, 'universal')
         destinationDirectory = layout.buildDirectory.dir('libs')
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
@@ -152,7 +152,7 @@ tasks.named('build') {
         // Sweep stale universal jars of earlier versions so build/libs only ever holds this build's.
         def keep = moduleDirs.collect {
             def mid = loadModule(it).getProperty('id')
-            "${mid}-${stampVersion(componentVersions.getProperty(mid))}-universal.jar".toString()
+            jarFileName(mid, stampVersion(componentVersions.getProperty(mid)), 'universal').toString()
         } as Set
         def libs = layout.buildDirectory.dir('libs').get().asFile
         libs.listFiles()?.each { f ->

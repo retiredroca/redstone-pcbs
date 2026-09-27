@@ -65,10 +65,16 @@ sourceSets {
 
 base {
     // The jar is named <mod-id>-<version>-neoforge.jar (see jarFileName in gradle/versions.gradle),
-    // so archivesName is the bare mod id and the loader is the trailing classifier.
+    // so archivesName is the bare mod id and the loader is the trailing element of the file name.
     archivesName = mod_id
 }
-tasks.named('jar') { archiveClassifier = 'neoforge' }
+// Name the file rather than using archiveClassifier. A classifier is part of the published maven
+// identity, so a multi-module project using this template would land it in repo/ as
+// <artifactId>-<version>-<loader>.jar and every host module would fail to resolve the library.
+// archiveFileName renames the file and leaves the classifier empty, so coordinates stay untouched.
+// Set on remapJar as well as jar: remapJar writes the final artifact and does not inherit
+// archiveFileName from jar (the jar task's own output goes to build/devlibs).
+tasks.named('jar') { archiveFileName = jarFileName(mod_id, mod_version, 'neoforge') }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(java_version)
 

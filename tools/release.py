@@ -48,6 +48,13 @@ def die(msg):
     sys.exit(f"release: error: {msg}")
 
 
+# A release jar is <id>-<version>-<loader>.jar, matching jarFileName in gradle/versions.gradle.
+# Matching the shape rather than a list of ids means a new module needs no edit here, and it rejects
+# every pre-rename shape (a leading loader, or a dot before the version), which a count check cannot.
+# The id group allows dashes so a `bundle-` prefix matches.
+ALLOWED_JAR = re.compile(r"^[A-Za-z0-9_-]+-[0-9][0-9.]*-(fabric|neoforge|universal)\.jar$")
+
+
 # --- process helpers ----------------------------------------------------------------
 
 
@@ -135,17 +142,25 @@ def bump(mc, mod, stamp, dry=False):
 # --- build --------------------------------------------------------------------------
 
 
-def build(mc, dry, no_daemon=False):
+def build(mc, dry, no_daemon=False, stamp=None):
     g = gradlew()
     # Reuse a warm Gradle daemon across these invocations by default: each one would otherwise pay a
     # cold JVM start and reconfigure every included build. --no-daemon reproduces a CI-like cold
     # build; CI always passes it, where each run is a fresh container.
     daemon = ["--no-daemon"] if no_daemon else []
+    # One stamp, computed once, by versioning.stamp() and written into versions.properties for the
+    # component being released. Gradle would otherwise compute its own stamp at build time, and the
+    # two can disagree in two ways: an hour boundary between this call and the build, and any
+    # component still holding a bare "1.0.0" (a project generated from the template), which
+    # stampVersion() appends a fresh stamp to at build time. Either way the jar names below are built
+    # from the python value while the jars on disk carry Gradle's, so every upload path misses and
+    # skips silently. Passing the stamp in makes the two agree by construction.
+    pin = [f"-PversionStamp={stamp}"] if stamp else []
     # Bootstrap: library artifacts must be in repo/ before dependents compile, because dependents
     # require a version floor ([<floor>,<upper>)).
     for lib_id in library_ids(mc):
         for loader in ("fabric", "neoforge"):
-            run(g + daemon + ["-p", f"versions/{mc}/{lib_id}/{loader}",
+            run(g + daemon + pin + ["-p", f"versions/{mc}/{lib_id}/{loader}",
                      "publishMavenJavaPublicationToRepoRepository"], dry=dry)
     # Staged build (loader jars -> loader bundles -> universal -> universal bundles) as separate
     # invocations, so a failure names the layer that broke. The last one unions the staged dirs
@@ -158,7 +173,7 @@ def build(mc, dry, no_daemon=False):
         ["releaseUniversalBundles", "releaseJars", "publishLibrary"],
     ]
     for step in steps:
-        run(g + daemon + ["--console=plain", f"-Pmc={mc}", "--refresh-dependencies"] + step, dry=dry)
+        run(g + daemon + pin + ["--console=plain", f"-Pmc={mc}", "--refresh-dependencies"] + step, dry=dry)
 
 
 def bundle_definitions():
@@ -219,6 +234,12 @@ def verify(mc, dry):
     expected = expected_jars(mc)
     if len(jars) != expected:
         die(f"expected {expected} release jars, found {len(jars)}: {jars}")
+    # The count alone cannot tell a correct jar from a stale one: a set of pre-rename jars has the
+    # same length as the current set, so `build/release` leftovers from an earlier naming scheme
+    # would be copied into dist/ and published. Check the shape too.
+    bad = [j for j in jars if not ALLOWED_JAR.match(j)]
+    if bad:
+        die(f"unexpected files in dist/ (not <id>-<version>-<loader>.jar): {bad}")
     log(f"release jar set OK ({len(jars)} files)")
 
 
@@ -246,20 +267,13 @@ def changelog(tag, dry):
     log("wrote dist/changelog.md")
 
 
-def bundle_version(name, ids, versions):
-    """One bundle's version: 1.0.0.<newest stamp among its contents' versions>."""
-    stamps = [versions[i].rsplit(".", 1)[-1] for i in ids]
-    return f"1.0.0.{max(stamps)}"
-
-
-def bundle_versions():
-    """Each bundle's version: 1.0.0.<newest stamp among its contents>."""
-    versions = read_props(VERSIONS)
-    out = {}
-    for name, ids in bundle_definitions().items():
-        stamps = [versioning.bump(versions[i], versioning.stamp()).rsplit(".", 1)[-1] for i in ids]
-        out[name] = f"1.0.0.{max(stamps)}"
-    return out
+# A bundle's version is not computed here. Gradle decides it (1.0.0.<newest stamp among the
+# contents' *built* versions) and writes it into the filename; the only correct way to learn it is to
+# read it back off the built jar. The two helpers that used to predict it from versions.properties
+# plus a fresh versioning.stamp() were never called, and were wrong twice over: a second clock read
+# could disagree with the one the build used, and a component still holding a bare "1.0.0" is stamped
+# by Gradle at build time, which the prediction could not see. Read the filename instead, as
+# mc-storage-area-network's tools/release.py bundle_versions() does.
 
 
 # --- git ----------------------------------------------------------------------------
@@ -472,7 +486,7 @@ def main():
     log(f"tag: {tag}")
 
     if not args.skip_build:
-        build(mc, dry, args.no_daemon)
+        build(mc, dry, args.no_daemon, stamp)
         collect(mc, dry)
     else:
         verify(mc, dry)
