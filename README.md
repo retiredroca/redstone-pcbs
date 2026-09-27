@@ -3,7 +3,7 @@
 A Minecraft mod for **Fabric** and **NeoForge** (Minecraft 1.21.1) that puts a compact,
 save-persistent redstone board inside a single block.
 
-![Redstone PCBs demo](redstonepcb.gif)
+![Redstone PCBs demo](redstonepcb-bridge.gif)
 
 ## What it does
 
