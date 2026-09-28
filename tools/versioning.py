@@ -165,11 +165,28 @@ def bump_semantic(value: str, part: str = "patch") -> str:
 
 
 def floor(version: str) -> str:
-    """The first three components, e.g. 1.0.2 from 1.0.2.26091512 (and 1.0.0 from 1.0.0)."""
-    parts = version.split(".")
+    """The first three components, e.g. 1.0.2 from 1.0.2.26091512 (and 1.0.0 from 1.0).
+
+    Rejects anything that is not a dotted run of digits. The floor is what the hosts' dependency
+    ranges are built from, so a bad value does not fail the release that produced it -- it
+    publishes a range matching nothing, and the failure surfaces much later as mods that quietly do
+    not load. An empty string is the case worth naming: it is what a missing, renamed or
+    unpopulated versions.properties key yields, and silently produced ",1.1)" until this rejected
+    it.
+    """
+    text = (version or "").strip()
+    if not text:
+        raise ValueError("no version to take a floor from (the value was empty)")
+    parts = text.split(".")
+    if not all(p.isascii() and p.isdigit() for p in parts):
+        raise ValueError(f"expected a dotted run of digits, got {version!r}")
     while len(parts) < 3:
         parts.append("0")
     return ".".join(parts[:3])
+
+
+def tag(version: str, stamp: str) -> str:
+    return f"v{floor(version)}.{stamp}"
 
 
 def tag(version: str, stamp: str) -> str:
@@ -283,7 +300,10 @@ def main() -> int:
     p_floor.set_defaults(func=do_floor)
 
     args = ap.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except ValueError as exc:
+        sys.exit(f"versioning: {exc}")
     return 0
 
 
