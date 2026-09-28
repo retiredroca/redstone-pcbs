@@ -129,6 +129,64 @@ ext.jarFileName = { String id, String version, String loader -> "${id}-${version
 // A dependency's floor range: [<major.minor.patch>,<upper>). Unused in a single-mod project, but
 // kept so the loader builds share one script shape with the multi template.
 ext.floorUpper = pyConst('FLOOR_UPPER', '1.1')   // single source: tools/versioning.py
+// --- feature-line guard ---------------------------------------------------------------------------------
+// A feature branch must be on its own version line, or its jars are indistinguishable by filename
+// from the released line's and a test instance cannot tell them apart. The bump is the tooling's
+// job (release.py --bump); this refuses to produce a jar when it has not happened.
+//
+// The test is "has this branch modified versions.properties since it diverged from the release
+// line?", NOT "does its patch differ from main's": a branch stacked on another feature branch
+// inherits that branch's number without ever having bumped, and a patch-equality test would call it
+// clean. merge-base answers it exactly, and works the same in a worktree (no checkout event fires
+// there) as in a plain checkout.
+//
+// Wired to the release tasks only, so ordinary development is unaffected. Detached HEAD means a CI
+// checkout, which is the release line by definition. -PallowUnbumped=true is the escape hatch for
+// reproducing or bisecting a release build; it is logged rather than silent.
+ext.featureLineGuard = { String taskName ->
+    if (project.findProperty('allowUnbumped') != null) {
+        logger.lifecycle("mechanics: -PallowUnbumped=true set, skipping the feature-line check for ${taskName}")
+        return
+    }
+    def git = { List<String> args ->
+        def p = ['git'] + args
+        try {
+            def proc = new ProcessBuilder(p).directory(rootProject.projectDir).redirectErrorStream(true).start()
+            def out = proc.inputStream.text.trim()
+            proc.waitFor()
+            return proc.exitValue() == 0 ? out : null
+        } catch (Exception ignored) {
+            return null
+        }
+    }
+    // Not a git checkout, or not on a branch: nothing to compare against.
+    def branch = git(['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (branch == null || branch == '' || branch == 'HEAD' || branch == 'main') {
+        return
+    }
+    def base = git(['merge-base', 'HEAD', 'main'])
+    if (base == null || base == '') {
+        return
+    }
+    def here = versionsFile == null ? null : versionsFile.getText('UTF-8')
+    def there = git(['show', base + ':versions.properties'])
+    if (here == null || there == null) {
+        return
+    }
+    if (here.trim() == there.trim()) {
+        throw new GradleException(
+            """Feature branch '${branch}' is still on the release line's version.
+  Its jars would be named exactly like the released ones, so a test instance cannot tell a
+  branch build from the release. Give this branch its own line, then rebuild:
+
+      python tools/release.py --mod all --bump patch --commit
+
+  Use --bump minor or --bump major if the line should start above a patch. To reproduce or
+  bisect a release build on purpose, pass -PallowUnbumped=true.""")
+    }
+    logger.lifecycle("mechanics: feature branch '${branch}' is on its own version line")
+}
+
 ext.moduleFloor = { String id ->
     def version = componentVersions.getProperty(id)
     if (version == null) {

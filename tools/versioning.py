@@ -5,7 +5,9 @@ Scheme: ``<major>.<minor>.<patch>.<yymmddhh>`` — e.g. ``1.0.2.26091512``.
 
 * the trailing ``yymmddhh`` stamp is bumped automatically, in the timezone chosen when the project
   was created (see ``TIMEZONE`` below; replace it by editing this line);
-* the patch (3rd component) is edited manually when a semantic bump is wanted;
+* the semantic line (first three components) moves via `bump_semantic` -- run it through
+  `tools/release.py --bump patch|minor|major`, or let the branch/merge workflow do it; it is
+  never hand-edited, so the tooling stays the only thing that writes versions.properties;
 * the tag is ``v<major>.<minor>.<patch>.<stamp>`` (single series, e.g. ``v1.0.2.26091512``).
 
 Library modules (``module.properties`` with ``library=true``) are depended on by the gameplay
@@ -137,6 +139,29 @@ def bump(value: str, stamp: str) -> str:
     Works whether ``value`` is a bare ``1.0.0`` or already stamped ``1.0.0.26091512``.
     """
     return f"{floor(value)}.{stamp}"
+
+
+def bump_semantic(value: str, part: str = "patch") -> str:
+    """Increment the semantic version line and drop the stamp, so the build re-stamps it.
+
+    The stamp is the tool's job (``bump``); the ``<major>.<minor>.<patch>`` line is a deliberate
+    decision, made by running this rather than by editing versions.properties by hand. A branch
+    takes the next patch so its jars are distinguishable from the released line's by filename;
+    a merged release takes the next patch unless a minor or major is called for.
+
+    Returns a three-component value -- ``1.0.1`` from ``1.0.0.26092517`` -- because
+    ``stampVersion`` appends the build-time stamp to anything shorter than four components.
+    """
+    if part not in ("patch", "minor", "major"):
+        raise ValueError(f"part must be patch, minor or major, not {part!r}")
+    parts = [int(p) if p.isdigit() else 0 for p in value.split(".")[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    if part == "major":
+        return f"{parts[0] + 1}.0.0"
+    if part == "minor":
+        return f"{parts[0]}.{parts[1] + 1}.0"
+    return f"{parts[0]}.{parts[1]}.{parts[2] + 1}"
 
 
 def floor(version: str) -> str:

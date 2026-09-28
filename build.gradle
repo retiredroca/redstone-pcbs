@@ -187,3 +187,15 @@ tasks.named('clean') {
 }
 
 apply from: new File(projectDir, 'gradle/version-resolver.gradle')
+
+// Refuse to build a release set on a feature branch that never took its own version line: its jars
+// would be named exactly like the released ones. Attached to the release tasks only, so ordinary
+// development (`./gradlew build`) is unaffected. The check reads git at execution time, so it works
+// the same in a worktree as in a plain checkout, and it is skipped on a detached HEAD (a CI
+// checkout, which is the release line by definition).
+['releaseLoaderJars', 'releaseLoaderBundles', 'releaseUniversal',
+ 'releaseUniversalBundles', 'releaseJars'].each { taskName ->
+    tasks.matching { it.name == taskName }.configureEach {
+        featureLineGuard(taskName)
+    }
+}
