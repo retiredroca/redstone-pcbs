@@ -87,6 +87,36 @@ def stampVersion = { String version ->
 }
 ext.stampVersion = stampVersion
 
+// --- version ordering -----------------------------------------------------------------------------------
+// The one place a version string becomes a comparable key. Every ordering decision -- which
+// component a bundle takes its version from, which maven-metadata entry is newest, which loader
+// version to resolve -- goes through here, so a change to what a version means is a change in one
+// file. It lives in versions.gradle rather than version-resolver.gradle because versions.gradle is
+// applied first by every build; a comparator defined in a script applied at the end is not available
+// to the code above it, which is what previously forced a second copy into build.gradle.
+//
+// Cast, do not compare strings. A decimal component has no fixed width, so lexical order and numeric
+// order must not be assumed to agree: '9' sorts after '10'. tokenize('.-+') and toInteger() make
+// 1.0.9 < 1.0.10 and 1.0.99 < 1.0.100, at any width, with no zero-padding on the versions.
+ext.versionKey = { String v -> v.tokenize('.-+').collect { it.isInteger() ? it.toInteger() : 0 } }
+ext.compareVersions = { String a, String b ->
+    def ka = versionKey(a)
+    def kb = versionKey(b)
+    for (int i = 0; i < Math.max(ka.size(), kb.size()); i++) {
+        def x = i < ka.size() ? ka[i] : 0
+        def y = i < kb.size() ? kb[i] : 0
+        if (x != y) {
+            return x <=> y
+        }
+    }
+    0
+}
+ext.maxVersion = { List<String> versions ->
+    // copy before sorting: sort() mutates in place, and a caller passing a shared list would see it
+    // reordered as a side effect.
+    versions ? new ArrayList(versions).sort { a, b -> compareVersions(a, b) }.last() : null
+}
+
 // Per-version Minecraft/toolchain pins, exposed under their original names so build scripts can
 // use ${minecraft_version}, ${loader_version}, ${neo_version}, etc. unchanged.
 def versionFile = findUp('version.properties')

@@ -25,22 +25,9 @@ def httpText = { String url ->
 
 def xmlVersions = { String xml -> (xml =~ /<version>([^<]+)<\/version>/).collect { it[1] } }
 
-def numericKey = { String v -> v.tokenize('.-+').collect { it.isInteger() ? it.toInteger() : 0 } }
-def compareVersions = { String a, String b ->
-    def ka = numericKey(a)
-    def kb = numericKey(b)
-    for (int i = 0; i < Math.max(ka.size(), kb.size()); i++) {
-        def x = i < ka.size() ? ka[i] : 0
-        def y = i < kb.size() ? kb[i] : 0
-        if (x != y) {
-            return x <=> y
-        }
-    }
-    0
-}
-def maxVersion = { List<String> versions ->
-    versions ? versions.sort { a, b -> compareVersions(a, b) }.last() : null
-}
+// versionKey / compareVersions / maxVersion are defined once in gradle/versions.gradle, which every
+// build applies before this script. They are used below to pick the newest published version of a
+// dependency; do not define a local copy here.
 
 def mcParts = { String mc -> mc.tokenize('.').collect { it.isInteger() ? it.toInteger() : 0 } }
 
