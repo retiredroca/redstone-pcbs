@@ -38,9 +38,10 @@ Thumbs.db
 # Local test screenshots / scratch files
 temp/
 
-# Local deploy script (machine-specific Prism paths + WinSCP sessions)
+# Local deploy script and session export (machine-specific Prism paths + WinSCP sessions)
 deploy.sh
 oc.sh
+session.json
 
 # Local release notes (machine-local)
 release-guide.txt
