@@ -53,8 +53,11 @@ moduleDirs.each { moduleDir ->
             include "${groupPath}/neoforge/**"
             include 'META-INF/neoforge.mods.toml'
             include 'META-INF/accesstransformer.cfg'
-            include 'redstonepcbs.neoforge.mixins.json'
-            include 'redstonepcbs.neoforge.refmap.json'
+            // The mixin config and its refmap sit at the jar root, not under <group>.neoforge, so
+            // without these the universal jar carries neoforge.mods.toml naming a mixin config it does
+            // not contain - and the mixins then do not apply on that loader, or the load fails on it.
+            include '**/*.mixins.json'
+            include '**/*refmap.json'
         }
     }
     universalTasks << t
