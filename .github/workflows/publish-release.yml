@@ -57,7 +57,6 @@ jobs:
     needs: resolve
     uses: ./.github/workflows/release-mod.yml
     with:
-      mode: publish
       release_tag: ${{ needs.resolve.outputs.tag }}
       minecraft: ${{ github.event.inputs.minecraft || '1.21.1' }}
     secrets: inherit
