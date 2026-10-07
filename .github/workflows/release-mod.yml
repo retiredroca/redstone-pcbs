@@ -135,6 +135,9 @@ jobs:
                   env.write(f"{comp.upper()}_CHANGED={'true' if comp in changed else 'false'}\n")
               env.write(f'PRIMARY={primary}\n')
               env.write(f'PRIMARY_VERSION={versions[primary]}\n')
+              # The platform steps below gate on PRIMARY_CHANGED, so derive it from the primary's own
+              # flag rather than re-testing membership in `changed`: the two cannot then disagree.
+              env.write(f"PRIMARY_CHANGED={'true' if primary in changed else 'false'}\n")
               env.write('MODULE_IDS=' + ','.join(versions) + '\n')
               env.write(f'ABBREV={abbrev}\n')
               env.write(f'RELEASE_TAG={tag}\n')
