@@ -96,7 +96,8 @@ jobs:
                   k, _, v = line.partition('=')
                   current[k.strip()] = v.strip()
 
-          ids = list(current)
+          ids = [k for k in current if k != 'abbrev']   # abbrev is a project setting, not a module
+          abbrev = current.get('abbrev', '').strip()
           targets = ids if mod == 'all' else [mod]
           for comp in targets:
               if comp not in current:
@@ -118,6 +119,7 @@ jobs:
               env.write(f"PRIMARY={primary}\n")
               env.write(f"PRIMARY_VERSION={versioning.bump(current[primary], stamp) if primary in targets else current[primary]}\n")
               env.write("MODULE_IDS=" + ",".join(ids) + "\n")
+              env.write(f"ABBREV={abbrev}\n")
           print(text)
           PY
 
@@ -217,6 +219,7 @@ jobs:
               if '=' in line and not line.lstrip().startswith('#'):
                   k, _, v = line.partition('=')
                   versions[k.strip()] = v.strip()
+          abbrev = versions.pop('abbrev', '').strip()   # project setting, not a module
 
           def git(*args):
               return subprocess.run(['git', *args], capture_output=True, text=True).stdout
@@ -239,6 +242,7 @@ jobs:
               env.write(f'PRIMARY={primary}\n')
               env.write(f'PRIMARY_VERSION={versions[primary]}\n')
               env.write('MODULE_IDS=' + ','.join(versions) + '\n')
+              env.write(f'ABBREV={abbrev}\n')
               env.write(f'RELEASE_TAG={tag}\n')
           PY
 
@@ -280,7 +284,7 @@ jobs:
         with:
           curseforge-id: 
           curseforge-token: ${{ secrets.CURSEFORGE_API_KEY }}
-          curseforge-files: dist/${PRIMARY}-${PRIMARY_VERSION}-universal.jar
+          curseforge-files: dist/${{ env.ABBREV }}${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}-universal.jar
           curseforge-dependencies: fabric-api(required){modrinth:P7dR8mSH}{curseforge:306612}
           name: ${{ env.PRIMARY }} ${{ env.PRIMARY_VERSION }}
           version: ${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}
@@ -304,10 +308,11 @@ jobs:
           MODRINTH_ID: ${{ vars.MODRINTH_ID || '' }}
         run: |
           set -euo pipefail
+          A="${ABBREV:+${ABBREV}-}"   # project abbreviation, prepended to every release jar name
           ./.github/scripts/modrinth-sync.sh \
             "${MODRINTH_ID}" \
             "mr.${PRIMARY}.version.${MC_VERSION}" "${PRIMARY_VERSION}" "${PRIMARY} ${PRIMARY_VERSION}" \
-            "dist/${PRIMARY}-${PRIMARY_VERSION}-universal.jar"
+            "dist/${A}${PRIMARY}-${PRIMARY_VERSION}-universal.jar"
 
       # --- Persist the bumped version / learned Modrinth id back to main -----------------------
       - name: Commit version + release state

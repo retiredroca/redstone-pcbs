@@ -112,6 +112,12 @@ java {
     withSourcesJar()
 }
 
+// The sources jar is a release-shaped artifact too, so it takes the same name as the others -- with
+// the project abbreviation. Without this it keeps the bare archivesName, which is neither
+// standardized nor what the keep-set below expects.
+tasks.named('sourcesJar') { archiveFileName = jarFileName(mod_id, mod_version, 'sources') }
+tasks.named('remapSourcesJar') { archiveFileName = jarFileName(mod_id, mod_version, 'sources') }
+
 // Keep build/libs to this build's jars only: drop any kept from earlier version stamps.
 tasks.named('build') {
     doLast {
@@ -121,7 +127,7 @@ tasks.named('build') {
         }
         def name = base.archivesName.get()
         def keep = [jarFileName(mod_id, mod_version, 'fabric').toString(),   // .toString(): a GString never equals its String
-                    "${name}-${project.version}-sources.jar".toString(),
+                    jarFileName(mod_id, mod_version, 'sources').toString(),
                     "${name}-${project.version}-dev.jar".toString()] as Set
         libs.listFiles()?.each { f ->
             if (f.isFile() && f.name.endsWith('.jar') && !keep.contains(f.name)) {
