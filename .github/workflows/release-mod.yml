@@ -160,7 +160,7 @@ jobs:
         if: ${{ env.PRIMARY_CHANGED == 'true' }}
         uses: Kir-Antipov/mc-publish@v3.3
         with:
-          curseforge-id: 
+          curseforge-id: ${{ vars.CURSEFORGE_ID }}
           curseforge-token: ${{ secrets.CURSEFORGE_API_KEY }}
           curseforge-files: dist/${{ env.ABBREV }}${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}-universal.jar
           curseforge-dependencies: fabric-api(required){modrinth:P7dR8mSH}{curseforge:306612}
@@ -175,7 +175,7 @@ jobs:
           java: ${{ env.JAVA_VERSION }}
           retry-attempts: 5
           retry-delay: 15000
-          fail-mode: warn
+          fail-mode: fail
 
       # --- Modrinth (one project; the previous version is archived) ----------------------------
       - name: Modrinth
@@ -183,7 +183,7 @@ jobs:
         env:
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
           MODRINTH_GAME_VERSIONS: ${{ env.MC_VERSION }}
-          MODRINTH_ID: ${{ vars.MODRINTH_ID || '' }}
+          MODRINTH_ID: ${{ vars.MODRINTH_ID }}
         run: |
           set -euo pipefail
           A="${ABBREV:+${ABBREV}-}"   # project abbreviation, prepended to every release jar name
