@@ -7,6 +7,10 @@ plugins {
     id 'java'
 }
 
+// The module directory is selected the same way the rest of the build selects it, so a `-Pmc=<other>`
+// run does not silently compile the 1.21.1 chip package.
+def mc = providers.gradleProperty('mc').getOrElse('1.21.1')
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
@@ -16,7 +20,7 @@ java {
 sourceSets {
     main {
         java {
-            srcDir rootProject.file('versions/1.21.1/redstonepcbs/common/src/main/java')
+            srcDir rootProject.file("versions/${mc}/redstonepcbs/common/src/main/java")
             include 'com/retiredroca/redstonepcbs/chip/**'
         }
     }

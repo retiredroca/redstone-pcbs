@@ -108,20 +108,20 @@ tasks.register('releaseUniversalBundles', Sync) {
     // No bundles in a single-mod project.
 }
 
-// The union of every staged group into build/release/. A single Sync task (rather than per-group
-// copy tasks that all declare the same output directory) so Gradle tracks the group directories as
-// inputs and cannot skip the copy when a group was rebuilt.
-def releaseGroupDirs = [
-        layout.buildDirectory.dir('release-loader'),
-        layout.buildDirectory.dir('release-loader-bundles'),
-        layout.buildDirectory.dir('release-universal'),
-        layout.buildDirectory.dir('release-universal-bundles'),
-]
+// The union of the four staged directories, as one task.
+//
+// A Sync over all four directories declares the inputs and empties the destination of anything it
+// did not put there, so a rebuilt group is picked up and an earlier stamp cannot accumulate.
+def releaseGroups = ['releaseLoaderJars', 'releaseLoaderBundles', 'releaseUniversal',
+                     'releaseUniversalBundles']
 
 tasks.register('releaseJars', Sync) {
-    dependsOn 'releaseLoaderJars', 'releaseLoaderBundles', 'releaseUniversal', 'releaseUniversalBundles'
+    releaseGroups.each { name ->
+        def group = tasks.named(name)
+        dependsOn group
+        from(group)
+    }
     into layout.buildDirectory.dir('release')
-    releaseGroupDirs.each { dir -> from(dir) }
 
     // Fail loudly if any module jar is missing, rather than silently assembling an incomplete set: a
     // release built without one of its members is worse than a build that stops. Derived from the

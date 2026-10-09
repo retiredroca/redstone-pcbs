@@ -36,7 +36,7 @@ tasks.named('remapJar') { archiveFileName = jarFileName(mod_id, mod_version, 'fa
 def commonPrefix = mod_group_id
 def relocatedPrefix = "${mod_group_id}.fabric.common"
 
-tasks.register('relocateCommonSources', Sync) {
+tasks.register('relocateCommonSources', Copy) {
     from(rootProject.file('../common/src/main/java'))
     into(layout.buildDirectory.dir('generated/common'))
     filter { String line ->
@@ -44,7 +44,7 @@ tasks.register('relocateCommonSources', Sync) {
     }
 }
 
-tasks.register('relocateLoaderSources', Sync) {
+tasks.register('relocateLoaderSources', Copy) {
     from('src/main/java')
     into(layout.buildDirectory.dir('generated/loader'))
     filter { String line ->
@@ -125,10 +125,8 @@ tasks.named('build') {
         if (!libs.isDirectory()) {
             return
         }
-        def name = base.archivesName.get()
-        def keep = [jarFileName(mod_id, mod_version, 'fabric').toString(),   // .toString(): a GString never equals its String
-                    jarFileName(mod_id, mod_version, 'sources').toString(),
-                    "${name}-${project.version}-dev.jar".toString()] as Set
+        def keep = [jarFileName(mod_id, mod_version, 'fabric').toString(),
+                    jarFileName(mod_id, mod_version, 'sources').toString()] as Set
         libs.listFiles()?.each { f ->
             if (f.isFile() && f.name.endsWith('.jar') && !keep.contains(f.name)) {
                 f.delete()

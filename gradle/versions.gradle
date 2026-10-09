@@ -145,6 +145,7 @@ if (moduleFile != null) {
     ext.mod_license = module.getProperty('license')
     ext.mod_description = module.getProperty('description')
     ext.mod_version = stampVersion(componentVersions.getProperty(ext.mod_id))
+    ext.mod_library = (module.getProperty('library') ?: 'false').toBoolean()
 }
 
 // Release jar name: <mod-id>-<version>-<loader>.jar, e.g. redstonepcbs-1.0.1.26092517-fabric.jar.
