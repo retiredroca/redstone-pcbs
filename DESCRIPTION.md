@@ -196,8 +196,8 @@ The universal jar is on CurseForge/Modrinth. If you want a single-loader build
 
 ## License
 
-This project's own source code is licensed under
-[Apache-2.0](https://github.com/retiredroca/redstone-pcbs/blob/main/LICENSE).
+This project's own source code is **All Rights Reserved** — see
+[LICENSE](https://github.com/retiredroca/redstone-pcbs/blob/main/LICENSE).
 
 ## Credits & third-party notices
 
