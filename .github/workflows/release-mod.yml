@@ -145,6 +145,10 @@ jobs:
               env.write(f"PRIMARY_CHANGED={'true' if primary in changed else 'false'}\n")
               env.write('MODULE_IDS=' + ','.join(versions) + '\n')
               env.write(f'ABBREV={abbrev}\n')
+              # The abbreviation with its trailing hyphen, so an mc-publish glob cannot gain a
+              # leading '-' when the project has no abbreviation. release.py's jar_name builds the
+              # same prefix, so the glob and the built name cannot drift apart.
+              env.write(f"ABBREV_PREFIX={abbrev + '-' if abbrev else ''}\n")
               env.write(f'RELEASE_TAG={tag}\n')
           PY
 
@@ -167,7 +171,7 @@ jobs:
         with:
           curseforge-id: ${{ vars.CURSEFORGE_ID }}
           curseforge-token: ${{ secrets.CURSEFORGE_API_KEY }}
-          curseforge-files: dist/${{ env.ABBREV }}-${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}-universal.jar
+          curseforge-files: dist/${{ env.ABBREV_PREFIX }}${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}-universal.jar
           curseforge-dependencies: fabric-api(required){modrinth:P7dR8mSH}{curseforge:306612}
           name: ${{ env.PRIMARY }} ${{ env.PRIMARY_VERSION }}
           version: ${{ env.PRIMARY }}-${{ env.PRIMARY_VERSION }}
