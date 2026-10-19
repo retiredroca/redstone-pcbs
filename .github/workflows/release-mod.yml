@@ -64,7 +64,12 @@ jobs:
           # mc-publish defaults its `files` glob to build/libs/*.jar, so stage the downloaded
           # release jars there too.
           mkdir -p build/libs
-          cp dist/*.jar build/libs/
+          # Only the mod jars: a sources jar is not a platform artifact, and mc-publish's
+          # default `files` glob over build/libs would pick one up.
+          for jar in dist/*.jar; do
+            case "$jar" in *-sources.jar) continue ;; esac
+            cp "$jar" build/libs/
+          done
 
       # Safety net: only the expected release jars may be published, and all of them must be there.
       # The count is computed from the project's own modules, never hardcoded. `allowed=` is the same
@@ -79,7 +84,7 @@ jobs:
           import release
           print(release.expected_jars('${MC_VERSION}'))
           ")
-          allowed='^[A-Za-z0-9_-]+-[0-9][0-9.]*-(fabric|neoforge|universal)\.jar$'
+          allowed='^[A-Za-z0-9_-]+-[0-9][0-9.]*-(fabric|neoforge|universal)(-sources)?\.jar$'
           bad=$(ls -1 dist | grep -vE "$allowed" || true)
           if [ -n "$bad" ]; then
             echo "Unexpected file(s) in dist/ (refusing to publish):" >&2
