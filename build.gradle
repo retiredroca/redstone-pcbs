@@ -68,7 +68,7 @@ moduleDirs.each { moduleDir ->
 //   1 releaseUniversal        build/release-universal/        (merged universal jars)
 //   2 releaseUniversalBundles build/release-universal-bundles/ (none here; no bundles.properties)
 // releaseLoaderJars / releaseLoaderBundles build the per-loader jars and their sources for one loader
-// only (-Ploader=fabric|neoforge). releaseJars is the ordered union of all four into build/release/.
+// only (-Ploader=fabric|neoforge). releaseJars is the ordered union of all four into build/release/<mc>/.
 def loaderFilter = (findProperty('loader') ?: '').toString().toLowerCase()
 def activeLoaders = loaderFilter ? [loaderFilter] : ['fabric', 'neoforge']
 
@@ -128,7 +128,7 @@ tasks.register('releaseJars', Sync) {
         dependsOn group
         from(group)
     }
-    into layout.buildDirectory.dir('release')
+    into layout.buildDirectory.dir("release/${mc}")
 
     // Fail loudly if any module jar is missing, rather than silently assembling an incomplete set: a
     // release built without one of its members is worse than a build that stops. Derived from the
