@@ -178,13 +178,13 @@ blueprints.
 The jar is **universal** — the same file works on both Fabric and NeoForge (it holds the
 loader-specific builds inside and each loader loads only its own copy).
 
-Drop `redstonepcbs-<version>-universal.jar` in `mods/`. There is one mod, so there is nothing to
+Drop `redstonepcbs-<version>-universal-<mc>.jar` in `mods/`. There is one mod, so there is nothing to
 combine and no companion jar to install.
 
 Install **Fabric Loader + Fabric API**, or **NeoForge 21.1.235+**, for Minecraft 1.21.1 first.
 
 The universal jar is on CurseForge/Modrinth. If you want a single-loader build
-(`redstonepcbs-<version>-fabric.jar` / `-neoforge.jar`), grab it from
+(`redstonepcbs-<version>-fabric-<mc>.jar` / `-neoforge-<mc>.jar`), grab it from
 [GitHub Releases](https://github.com/retiredroca/redstone-pcbs/releases).
 
 ## Compatibility

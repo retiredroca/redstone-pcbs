@@ -95,7 +95,7 @@ itself appears in the vanilla Redstone Blocks creative tab.
 ./gradlew cleanArtifacts     # wipe every generated jar/dir (use before a fully fresh build)
 ```
 
-Jars are written to `build/release/<mc>/` (`<id>-<version>-universal.jar` plus the per-loader jars) and
+Jars are written to `build/release/<mc>/` (`<id>-<version>-universal-<mc>.jar` plus the per-loader jars) and
 `build/libs/`. Every build **sweeps stale artifacts**: the release directories are synced (old
 versions removed) and each build's `build` task deletes jars from earlier version stamps, so
 `build/release/<mc>` and the `build/libs` directories only ever hold the current build for that version.
