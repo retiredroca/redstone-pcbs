@@ -25,20 +25,18 @@ v<major>.<minor>.<patch>.<yymmddhh>-<mc>   e.g. v1.0.2.26091512-1.21.1   (the ta
 --mod all             every component
 ```
 
-Use `--mod all` when a change spans the library and its dependents, so the bundle cannot mix old and
+Use `--mod all` when a change spans the library and its dependents, so the release cannot mix old and
 new component versions.
 
-## Local release preparation
-
-`tools/release.py` does not commit, push, create GitHub releases or upload to CurseForge/Modrinth.
+## Local build
 
 ```bash
 python tools/release.py --mod all --dry-run   # preview every version; change nothing
 python tools/release.py --mod all             # stamp and build every version
 ```
 
-With no `--mc`, every directory under `versions/` is prepared. `--mc <mc>` restricts the run to one
-Minecraft version. The preparation:
+With no `--mc`, every directory under `versions/` is built. `--mc <mc>` restricts the run to one
+Minecraft version. The build:
 
 1. stamps the named component(s) once in `versions.properties`;
 2. publishes library modules to the in-repo maven (`repo/`);
@@ -46,47 +44,46 @@ Minecraft version. The preparation:
    `releaseUniversalBundles`), then `releaseJars`;
 4. copies the jars into `dist/<mc>/`, verifies the complete set, and writes `dist/<mc>/changelog.md`.
 
-It leaves `versions.properties` and any `repo/` changes in the working tree. **Commit and push them
-yourself.** Then create the local tags:
+The script does not commit. Commit and push the prepared files yourself.
+
+## Publish the GitHub release
 
 ```bash
 python tools/release.py --create-tags
 ```
 
-That creates one `v<version>-<mc>` tag per selected version; it does not commit or push. Push the tags
-yourself. The tag push is the release trigger.
+This uses the committed version and the local `dist/<mc>/` jars. It:
 
-## What the tag push does
+1. creates the `v<version>-<mc>` tags and pushes them;
+2. creates a draft GitHub release per MC with your stored GitHub token;
+3. attaches every locally built jar and sources jar;
+4. publishes the release.
 
-A `v*-*` tag push runs `.github/workflows/release-tag.yml`:
+Publishing fires `release: published`, which runs the separate `publish-release.yml` workflow.
+That workflow downloads the attached jars and uploads **only the universal jars** to
+CurseForge/Modrinth. Per-loader jars and sources jars are never sent to the platforms.
 
-1. checks out the tag and builds the staged release set in CI;
-2. verifies the complete jar set;
-3. creates the GitHub release as a draft, uploads **every jar and sources jar**, and publishes it.
+The build does not run in GitHub. There is no tag-build workflow.
 
-Publishing the release fires `release: published`, which runs `publish-release.yml` and
-`release-mod.yml`:
+## Bundles
 
-- they download the assets from GitHub;
-- they publish **only universal jars** to CurseForge/Modrinth:
-  - single-module projects publish the primary universal jar;
-  - multi-module projects publish every component universal jar and universal bundle jar;
-- per-loader jars and sources jars are never sent to the platforms;
-- the workflow does **not** commit. It uploads the updated `release-state.properties` as a workflow
-  artifact. Download and commit it yourself when instructed.
+A bundle is for a project whose bundles have different membership or dependency sets — mcsan is the
+example. Two bundles with the same module set produce duplicate jars, duplicate release assets and
+duplicate platform uploads. `tools/release.py` rejects that configuration before building, and the
+platform workflow rejects it before uploading. A project with no distinct bundle should have none.
 
-Platform publishing uses the repository variables and secrets documented in `PROJECT-GUIDE.md`.
+mc-personas has no bundles: it is installed as `api` + `personas`.
 
 ## Flags
 
 ```
 --mc <version>       one Minecraft version under versions/ (default: every version)
 --mod <id>|all       component(s) to stamp (required for preparation and --bump)
---create-tags        create the local v<version>-<mc> tags from the committed versions.properties
+--create-tags        push tags and publish the GitHub releases from the prepared dist/<mc>/
 --tag <tag>          explicit tag for --create-tags (requires --mc)
 --bump patch|minor|major
                      move the semantic version line and stop; never commits
---local-only         stamp and build every selected version; never create tags
+--local-only         stamp and build every selected version; never create tags or releases
 --dry-run            print the plan; change nothing
 --unsigned           create unsigned tags
 --allow-dirty        skip the clean-tree check during preparation
@@ -101,16 +98,15 @@ python tools/release.py --mod <id> --local-only --allow-dirty
 ```
 
 The jars land in `build/release/<mc>/` and `dist/<mc>/` with the next stamp. Undo the version bump
-with `git checkout -- versions.properties`. No commit, tag, push, GitHub release or platform upload is
+with `git checkout -- versions.properties`. No commit, tag, GitHub release or platform upload is
 performed.
-
-The local build is verification only. The release jars that are published are built by the tag
-workflow from the committed tag.
 
 ## No `origin` remote yet?
 
-Preparation and `--create-tags` still work locally. You need a remote to push the commit and tags and
-to run the GitHub release workflows.
+Preparation works locally. `--create-tags` needs the GitHub origin and a stored GitHub credential to
+publish the release; without them it stops instead of creating a partial release. The stored token is
+deliberate: a release published with the Actions `GITHUB_TOKEN` does not trigger `release: published`,
+so the platform workflow would never start.
 
 ## Windows note
 
