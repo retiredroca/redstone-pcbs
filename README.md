@@ -106,7 +106,7 @@ their metadata carry the full version. Override with `-PversionStamp=<stamp>` or
 `-Pnostamp=true`. The release driver (`tools/release.py`) writes the stamped value into
 `versions.properties`, which the build then uses as-is.
 
-> Gradle 8.14 must run on JDK 17-23 (the example targets Java 21). If your default `java` is newer,
+> Gradle 9.5.1 must run on JDK 17-23 (the example targets Java 21). If your default `java` is newer,
 > point `JAVA_HOME` at a JDK 21 or set `org.gradle.java.home` in `gradle.properties`.
 
 ## Layout

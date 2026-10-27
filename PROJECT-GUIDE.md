@@ -11,7 +11,7 @@ versions, and adding modules.
 
 ## Prerequisites
 
-- **JDK** for Gradle. Gradle 8.14 must *run* on JDK 17–23; the project *compiles* with the
+- **JDK** for Gradle. Gradle 9.5.1 must *run* on JDK 17–23; the project *compiles* with the
   toolchain from `versions/<mc>/version.properties` (`java_version`). If your default `java` is
   newer than 23, point `JAVA_HOME` at a JDK 21 (or set `org.gradle.java.home` in
   `gradle.properties` for the IDE only — CI strips that line).
